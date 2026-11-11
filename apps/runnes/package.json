@@ -1,0 +1,15 @@
+{
+  "name": "runnes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "小霸王学习机 SB2000（SB-DOS） 程序",
+  "scripts": {
+    "build": "fcdev build src",
+    "start": "fcdev run src",
+    "sync": "fcdev sync",
+    "disk": "fcdev disk src"
+  },
+  "devDependencies": {
+    "fcdev": "0.3.1"
+  }
+}

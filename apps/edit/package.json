@@ -1,0 +1,15 @@
+{
+  "name": "edit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SB-DOS 文本编辑器",
+  "scripts": {
+    "build": "fcdev build src",
+    "start": "fcdev run src",
+    "sync": "fcdev sync",
+    "disk": "fcdev disk src"
+  },
+  "devDependencies": {
+    "fcdev": "0.3.1"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "target": "sb2000",
+  "name": "runnes",
+  "firmware": "D:\\GitCode\\sb2000\\reference\\rom\\SB2K_BIOS.NES"
+}

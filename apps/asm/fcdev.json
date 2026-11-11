@@ -1,0 +1,8 @@
+{
+  "target": "sb2000",
+  "name": "asm",
+  "firmware": "D:\\GitCode\\sb2000\\reference\\rom\\SB2K_BIOS.NES",
+  "targetOptions": {
+    "banks": 8
+  }
+}
