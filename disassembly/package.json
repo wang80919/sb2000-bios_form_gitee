@@ -1,0 +1,20 @@
+{
+  "name": "sb2000-bios-reverse",
+  "version": "0.1.0",
+  "private": true,
+  "description": "小霸王学习机 SB2000 BIOS 反汇编与调试工具链",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "floppy": "node tools/make-floppy.mjs",
+    "launch": "node tools/sb2kdbg.mjs --launch",
+    "coverage": "node tools/bios-coverage.mjs --routines 20",
+    "build:fast": "node ../bios/tools/bios-build.mjs --variant fastboot",
+    "all": "node tools/bios-all.mjs",
+    "docs": "node tools/bios-all.mjs --write",
+    "evidence": "node tools/bios-all.mjs --verify"
+  }
+}
