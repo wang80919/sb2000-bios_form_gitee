@@ -1,0 +1,1313 @@
+; 作用：软驱控制器断电停转：FDC_CONTROL 连写 4 次 0，FDC_STARTED 清 0，延时一次。
+; 输出：C=0。
+; 调用者：DISK_INIT、DISK_STOP
+FDC_STOP:
+    LDA #$00
+    STA FDC_CONTROL
+    STA FDC_CONTROL
+    STA FDC_CONTROL
+    STA FDC_CONTROL
+    LDA #$00
+    STA FDC_STARTED
+    LDA #$00
+    JSR FDC_DELAY
+    CLC
+    RTS
+; 作用：若控制器还没启动（FDC_STARTED 为 0）就调用 FDC_START 启动。
+; 输出：已启动时 A=FDC_STARTED（非 0）、C=0；刚启动时 A=0，C 为 FDC_START 的结果。
+; 调用者：FDC_RECALIBRATE_RETRY、FDC_TRANSFER_SECTOR、FDC_DETECT_MEDIA
+FDC_ENSURE_STARTED:
+    CLC
+    LDA FDC_STARTED
+    BNE @return
+    JSR FDC_START
+    LDA #$00
+@return:
+    RTS
+; 作用：复位并启动软驱控制器，发 SPECIFY（$03、$DF、$03）
+; 输出：C=0 成功，C=1 失败（DISK_STATUS=$15）。
+; 调用者：FDC_ENSURE_STARTED、FDC_WRITE_BYTE、DISK_INIT、DISK_START
+FDC_START:
+    LDA #$00
+    STA FDC_CONTROL
+    STA FDC_CONTROL
+    STA FDC_CONTROL
+    STA FDC_CONTROL
+    LDA #$00
+    JSR FDC_DELAY
+    LDA #$1C
+    STA FDC_CONTROL
+    STA FDC_CONTROL
+    STA FDC_CONTROL
+    STA FDC_CONTROL
+    LDA #$00
+    JSR FDC_DELAY
+; 作用：软驱控制器启动设定：FDC_CONFIG 写 4 次 0，再发 SPECIFY 命令（$03、$DF、$03），成功后 FDC_STARTED 置 $FF，C=0
+; 输出：C=0 成功，C=1 失败（DISK_STATUS=$15）。
+; 调用者：FDC_RESET_CONTROLLER、FDC_START（顺序执行到这里）
+FDC_SPECIFY_INIT:
+    LDA #$00
+    STA FDC_CONFIG
+    STA FDC_CONFIG
+    STA FDC_CONFIG
+    STA FDC_CONFIG
+    LDA #$03
+    JSR FDC_WRITE_BYTE
+    BCS @fail
+    LDA #$DF
+    JSR FDC_WRITE_BYTE
+    BCS @fail
+    LDA #$03
+    JSR FDC_WRITE_BYTE
+    BCS @fail
+    LDA #$FF
+    STA FDC_STARTED
+    CLC
+    RTS
+@fail:
+    LDA #$15
+    STA DISK_STATUS
+    SEC
+    RTS
+; 作用：延时，A 越大越久（每一轮内层循环 256 次）。
+; 输入：A=延时轮数（0 表示 256 轮）。
+; 调用者：FDC_STOP、FDC_START、FDC_DELAY、FDC_RECALIBRATE_RETRY、FDC_RESET_CONTROLLER、FDC_SEEK_RETRY
+FDC_DELAY:
+    LDX #$00
+@loop:
+    DEX
+    BNE @loop
+    SEC
+    SBC #$01
+    BNE FDC_DELAY
+    RTS
+; 作用：等控制器可以接收命令字节（FDC_STATUS 的高 2 位为 $80）后写入 FDC_DATA；高 2 位为 $C0（有结果字节待读）时先读掉；最多等 65536 轮。
+; 输入：A=要写的字节。
+; 输出：C=0 已写入，C=1 超时。
+; 调用者：FDC_SPECIFY_INIT、FDC_RECALIBRATE_RETRY、FDC_FORMAT_TRACK、FDC_TRANSFER_TRY、FDC_START_DATA_PHASE、FDC_SEEK_RETRY、FDC_DETECT_MEDIA
+FDC_WRITE_BYTE:
+    PHA
+    LDA #$00
+    STA FDC_BYTE_TIMEOUT_LO
+    STA FDC_BYTE_TIMEOUT_HI
+@loop:
+    LDA FDC_STATUS
+    AND #$C0
+    CMP #$80
+    BEQ @ready
+    CMP #$C0
+    BNE @next_try
+    LDA FDC_DATA
+@next_try:
+    DEC FDC_BYTE_TIMEOUT_LO
+    BNE @loop
+    DEC FDC_BYTE_TIMEOUT_HI
+    BNE @loop
+    PLA
+    SEC
+    RTS
+@ready:
+    PLA
+    STA FDC_DATA
+    CLC
+    RTS
+    JSR FDC_START
+    BCC FDC_RECALIBRATE_RETRY
+    SEC
+    RTS
+; 作用：发 RECALIBRATE（$07）把磁头退回 0 磁道，最多重试 6 次；落入 FDC_RECALIBRATE_RETRY。
+; 输出：C=0 成功（FDC_CURRENT_TRACK 清 0），C=1 失败（DISK_STATUS=$15）。
+; 调用者：FDC_SEEK_IF_NEEDED、FDC_RESET_CONTROLLER、DISK_INIT
+FDC_RECALIBRATE:
+    CLI
+    LDA #$06
+    STA FDC_RECALIBRATE_RETRIES
+; 作用：RECALIBRATE 的重试入口：FDC_ISR_MODE 清 0，保证控制器已启动，清中断标志，发命令 $07 与驱动器号 0，等中断；中断后 FDC_RESULT_1（当前磁道）为 0 且 FDC_RESULT_0 为 $20（寻道结束）算成功，延时后 FDC_CURRENT_TRACK 清 0；否则重试，用完 FDC_RECALIBRATE_RETRIES 次后失败。
+; 输出：C=0 成功，C=1 失败（DISK_STATUS=$15）。
+; 调用者：FDC_WRITE_BYTE、FDC_RECALIBRATE_RETRY、FDC_RECALIBRATE（顺序执行到这里）
+FDC_RECALIBRATE_RETRY:
+    LDA #$00
+    STA FDC_ISR_MODE
+    JSR FDC_ENSURE_STARTED
+    JSR FDC_CLEAR_IRQ
+    LDA #$07
+    JSR FDC_WRITE_BYTE
+    BCS @fail
+    LDA #$00
+    JSR FDC_WRITE_BYTE
+    BCS @fail
+    JSR FDC_WAIT_IRQ
+    BCS @fail
+    LDA FDC_RESULT_1
+    CMP #$00
+    BNE @retry
+    LDA FDC_RESULT_0
+    CMP #$20
+    BEQ @done
+@retry:
+    DEC FDC_RECALIBRATE_RETRIES
+    BNE FDC_RECALIBRATE_RETRY
+@fail:
+    LDA #$15
+    STA DISK_STATUS
+    SEC
+    RTS
+@done:
+    LDA #$1E
+    JSR FDC_DELAY
+    LDA #$00
+    STA FDC_CURRENT_TRACK
+    CLC
+    RTS
+; 作用：同 FDC_WAIT_IRQ，但超时计数器的初值更小，等待时间较短。
+; 输出：C=0 收到中断，C=1 超时或出错。
+; 调用者：FDC_DETECT_MEDIA
+FDC_WAIT_IRQ_SHORT:
+    LDA #$FF
+    STA FDC_TIMEOUT_2
+    LDA #$00
+    STA FDC_TIMEOUT_1
+    LDA #$00
+    STA FDC_TIMEOUT_0
+    JMP FDC_WAIT_IRQ_LOOP
+; 作用：等待软驱中断标志置位，超时 C=1；三个超时计数器 FDC_TIMEOUT_0 至 FDC_TIMEOUT_2 初值都是 $FC。
+; 输出：C=0 收到中断，C=1 超时或出错。
+; 调用者：FDC_RECALIBRATE_RETRY、FDC_SEEK_RETRY
+FDC_WAIT_IRQ:
+    LDA #$FC
+    STA FDC_TIMEOUT_2
+    STA FDC_TIMEOUT_1
+    STA FDC_TIMEOUT_0
+; 作用：轮询 FDC_IRQ_FLAG，三个计数器（FDC_TIMEOUT_0 至 FDC_TIMEOUT_2）都溢出即超时 C=1；标志置位后若 FDC_ERROR_FLAG 非 0 也算失败
+; 输出：C=0 收到中断，C=1 超时或 FDC_ERROR_FLAG 非 0。
+; 调用者：FDC_WAIT_IRQ_SHORT、FDC_WAIT_IRQ_LOOP、FDC_WAIT_IRQ（顺序执行到这里）
+FDC_WAIT_IRQ_LOOP:
+    LDA FDC_IRQ_FLAG
+    BNE @irq_set
+    INC FDC_TIMEOUT_0
+    BNE FDC_WAIT_IRQ_LOOP
+    INC FDC_TIMEOUT_1
+    BNE FDC_WAIT_IRQ_LOOP
+    INC FDC_TIMEOUT_2
+    BNE FDC_WAIT_IRQ_LOOP
+@timeout:
+    SEC
+    RTS
+@irq_set:
+    LDA FDC_ERROR_FLAG
+    BNE @timeout
+    CLC
+    RTS
+; 作用：清软驱中断标志并重新允许中断（功能 $13）
+; 调用者：FDC_RECALIBRATE_RETRY、FDC_SEEK_RETRY、FDC_DETECT_MEDIA、DISK_INIT
+FDC_CLEAR_IRQ:
+    LDA #$00
+    STA FDC_IRQ_FLAG
+    STA FDC_ERROR_FLAG
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$04
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$84
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    RTS
+; 作用：等控制器有结果字节可读（FDC_STATUS 高 2 位为 $C0）后读出 FDC_DATA；超时计数的高字节 FDC_BYTE_TIMEOUT_HI 沿用上一次的值（原程序只清了低字节）。
+; 输出：A=读到的字节，C=0 成功，C=1 超时。
+; 调用者：FDC_READ_RESULT
+FDC_READ_BYTE:
+    LDA #$00
+    STA FDC_BYTE_TIMEOUT_LO
+    STA FDC_BYTE_TIMEOUT_LO
+@loop:
+    LDA FDC_STATUS
+    AND #$C0
+    CMP #$C0
+    BEQ @ready
+    DEC FDC_BYTE_TIMEOUT_LO
+    BNE @loop
+    DEC FDC_BYTE_TIMEOUT_HI
+    BNE @loop
+    SEC
+    RTS
+@ready:
+    LDA FDC_DATA
+    CLC
+    RTS
+; 作用：读出 7 个结果字节到 FDC_RESULT_0-6
+; 输出：FDC_RESULT_0 至 FDC_RESULT_6。
+; 调用者：FDC_FORMAT_CHECK_RESULT、FDC_FORMAT_ABORTED、FDC_READ_DATA_LOOP、FDC_WRITE_DATA_LOOP、FDC_TRANSFER_DONE
+FDC_READ_RESULT:
+    JSR FDC_READ_BYTE
+    STA FDC_RESULT_0
+    JSR FDC_READ_BYTE
+    STA FDC_RESULT_1
+    JSR FDC_READ_BYTE
+    STA FDC_RESULT_2
+    JSR FDC_READ_BYTE
+    STA FDC_RESULT_3
+    JSR FDC_READ_BYTE
+    STA FDC_RESULT_4
+    JSR FDC_READ_BYTE
+    STA FDC_RESULT_5
+    JSR FDC_READ_BYTE
+    STA FDC_RESULT_6
+    RTS
+; 作用：当前磁道 FDC_CURRENT_TRACK 与目标磁道 FDC_TRACK 不同时寻道：目标小于当前时先退回 0 磁道（FDC_RECALIBRATE）；FDC_SEEK_HEAD、FDC_SEEK_TRACK 取目标；目标为 0 磁道时只做复位，否则寻道（FDC_SEEK）。
+; 输入：FDC_TRACK、FDC_HEAD、FDC_CURRENT_TRACK。
+; 输出：C=0 成功，C=1 失败。
+; 调用者：FDC_TRANSFER_TRY
+FDC_SEEK_IF_NEEDED:
+    LDA FDC_TRACK
+    CMP FDC_CURRENT_TRACK
+    BEQ @return_clear
+    BCS @set_target
+    JSR FDC_RECALIBRATE
+@set_target:
+    LDA FDC_HEAD
+    STA FDC_SEEK_HEAD
+    LDA FDC_TRACK
+    STA FDC_SEEK_TRACK
+    CMP #$00
+    BNE @seek
+    JSR FDC_RECALIBRATE
+    RTS
+@seek:
+    JSR FDC_SEEK
+    RTS
+@return_clear:
+    CLC
+    RTS
+    SEC
+    RTS
+    JMP FDC_RETRY
+; 作用：格式化当前磁道（命令 $4D）：先寻道，再发 FORMAT TRACK（512 字节扇区、18 扇区、间隔 $54，填充字节：0 磁道为 $00、其余磁道为 $F6），然后逐扇区以查询方式送 C、H、R、N 四字节；FDC_STATUS 的 DIO 位为 1（控制器提前结束）转 FDC_FORMAT_ABORTED，送完 18 个扇区转 FDC_FORMAT_CHECK_RESULT。
+; 输入：FDC_TRACK、FDC_HEAD、FDC_COMMAND。
+; 输出：DISK_STATUS 与 C。
+; 调用者：FDC_FORMAT_CHECK_RESULT、FDC_TRANSFER_TRY
+FDC_FORMAT_TRACK:
+    LDA FDC_HEAD
+    STA FDC_SEEK_HEAD
+    LDA FDC_TRACK
+    STA FDC_SEEK_TRACK
+    JSR FDC_SEEK
+    BCC @seeked
+    JMP FDC_RETRY
+@seeked:
+    LDA FDC_HEAD
+    ASL A
+    ASL A
+    STA FDC_DRIVE_HEAD
+    LDA #$01
+    STA FDC_SECTOR
+    LDA FDC_COMMAND
+    JSR FDC_WRITE_BYTE
+    BCC @command_sent
+    JMP FDC_RETRY
+@command_sent:
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$04
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDY #$00
+    LDX #$00
+    STX FDC_TRY_COUNT
+    LDA #$FC
+    STA FDC_TIMEOUT_2
+    LDA #$00
+    STA FDC_TIMEOUT_1
+    STA FDC_TIMEOUT_0
+    STA FDC_IRQ_FLAG
+    STA FDC_ERROR_FLAG
+    LDA FDC_TRACK
+    STA FDC_FORMAT_CYLINDER
+    LDA FDC_HEAD
+    STA FDC_FORMAT_HEAD
+    LDA FDC_SECTOR
+    STA FDC_FORMAT_SECTOR
+    LDA #$02
+    STA FDC_FORMAT_SIZE_CODE
+    LDA FDC_DRIVE_HEAD
+    JSR FDC_WRITE_BYTE
+    BCS FDC_FORMAT_FAIL
+    LDA #$02
+    JSR FDC_WRITE_BYTE
+    BCS FDC_FORMAT_FAIL
+    LDA #$12
+    JSR FDC_WRITE_BYTE
+    BCS FDC_FORMAT_FAIL
+    LDA #$54
+    JSR FDC_WRITE_BYTE
+    BCS FDC_FORMAT_FAIL
+    LDA FDC_FORMAT_CYLINDER,Y
+    PHA
+    LDA FDC_TRACK
+    BEQ @set_fill
+    LDA #$F6
+    STA FDC_FORMAT_SPARE
+@set_fill:
+    STA FDC_FORMAT_FILL
+    JSR FDC_WRITE_BYTE
+    PLA
+    BCS FDC_FORMAT_FAIL
+    LDY #$00
+    LDX FDC_FORMAT_CYLINDER,Y
+@wait_first:
+    BIT FDC_STATUS
+    BPL @wait_first
+    BVC @send_first
+    INC FDC_TIMEOUT_0
+    BNE @wait_first
+    INC FDC_TIMEOUT_1
+    BNE @wait_first
+    JMP FDC_FORMAT_ABORTED
+@send_first:
+    STX FDC_DATA
+    INY
+@next_byte:
+    LDX FDC_FORMAT_CYLINDER,Y
+@wait_ready:
+    BIT FDC_STATUS
+    BPL @wait_ready
+    BVS FDC_FORMAT_ABORTED
+    STX FDC_DATA
+    INY
+    CPY #$04
+    BNE @next_byte
+    LDY #$00
+    INC FDC_FORMAT_SECTOR
+    LDA FDC_FORMAT_SECTOR
+    CMP #$13
+    BNE @next_byte
+    JMP FDC_FORMAT_CHECK_RESULT
+; 作用：格式化时命令字节发送超时，转 FDC_RETRY
+; 调用者：FDC_FORMAT_TRACK、FDC_TRANSFER_TRY
+FDC_FORMAT_FAIL:
+    JMP FDC_RETRY
+; 作用：格式化结束后读 7 个结果字节：无错记下当前磁道、DISK_STATUS=0、C=0；写保护 $13；ST1 含 $B3 位时重新格式化；其余转 FDC_RETRY
+; 调用者：FDC_FORMAT_TRACK
+FDC_FORMAT_CHECK_RESULT:
+    JSR FDC_READ_RESULT
+    LDA FDC_RESULT_1
+    AND #$B3
+    BEQ @check_status
+    JMP FDC_FORMAT_TRACK
+@check_status:
+    LDA FDC_RESULT_0
+    AND #$FB
+    ORA FDC_RESULT_1
+    ORA FDC_RESULT_2
+    BEQ @success
+    LDA FDC_RESULT_1
+    AND #$02
+    BNE @write_protected
+    JMP FDC_RETRY
+@write_protected:
+    LDA #$13
+    STA DISK_STATUS
+    SEC
+    RTS
+@success:
+    SEI
+    LDA FDC_TRACK
+    STA FDC_CURRENT_TRACK
+    LDA #$00
+    STA DISK_STATUS
+    CLC
+    RTS
+    LDA #$15
+    STA DISK_STATUS
+    JMP FDC_RETRY
+; 作用：格式化时控制器提前结束数据传输：读结果字节，写保护 $13，ST1 或 ST2 报错 $17，ST1 位 4 为 $2B，其余转 FDC_RETRY
+; 调用者：FDC_FORMAT_TRACK
+FDC_FORMAT_ABORTED:
+    JSR FDC_READ_RESULT
+    LDA FDC_RESULT_1
+    SEI
+    LDA FDC_RESULT_0
+    AND #$40
+    CMP #$40
+    BEQ @check_write_protect
+    JMP FDC_RETRY
+@check_write_protect:
+    LDA FDC_RESULT_1
+    AND #$02
+    BEQ @check_errors
+    LDA #$13
+    STA DISK_STATUS
+    SEC
+    RTS
+@check_errors:
+    LDA FDC_RESULT_1
+    AND #$25
+    BEQ @check_st2
+@set_error:
+    LDA #$17
+    STA DISK_STATUS
+    JMP FDC_RETRY
+@check_st2:
+    LDA FDC_RESULT_2
+    AND #$21
+    BNE @set_error
+    LDA FDC_RESULT_1
+    AND #$10
+    BNE @overrun
+    JMP FDC_RETRY
+@overrun:
+    LDA #$2B
+    STA DISK_STATUS
+    JMP FDC_RETRY
+    SEC
+    RTS
+; 作用：用命令 FDC_COMMAND（$66 读扇区、$45 写扇区、$4D 格式化磁道，$E6 按 $66 处理）读写一个扇区：缓冲地址取 DISK_USER_BUF_LO/DISK_USER_BUF_HI，保证控制器已启动，内层重试 3 次，外层重试 3 次（FDC_RETRY_MODE 位 7 为 1 时 1 次），保存缓冲地址后进入 FDC_TRANSFER_TRY；数据以程序查询方式经 FDC_STATUS、FDC_DATA 逐字节传输。
+; 输入：FDC_COMMAND、FDC_TRACK、FDC_HEAD、FDC_SECTOR、DISK_USER_BUF_LO/HI。
+; 输出：DISK_STATUS、C（0 成功，1 失败）。
+; 调用者：DISK_FORMAT_TRACK、DISK_READ_SECTORS、DISK_READ_SECTOR_BUFFER、DISK_WRITE_SECTORS、DISK_WRITE_SECTOR_BUFFER、DISK_SCAN_TRACK
+FDC_TRANSFER_SECTOR:
+    LDA FDC_COMMAND
+    CMP #$E6
+    BNE @copy_buffer
+    LDA #$66
+    STA FDC_COMMAND
+@copy_buffer:
+    LDA DISK_USER_BUF_LO
+    STA DISK_BUF_PTR_LO
+    LDA DISK_USER_BUF_HI
+    STA DISK_BUF_PTR_HI
+    JSR FDC_ENSURE_STARTED
+    BNE @set_retries
+    BCS @start_failed
+    BCC @set_retries
+    JMP @set_retries
+@start_failed:
+    JMP FDC_FAIL
+@set_retries:
+    LDA #$03
+    STA FDC_INNER_RETRIES
+    LDA #$03
+    BIT FDC_RETRY_MODE
+    BPL @store_outer
+    LDA #$01
+@store_outer:
+    STA FDC_OUTER_RETRIES
+    LDA DISK_BUF_PTR_LO
+    STA FDC_SAVED_BUF_LO
+    LDA DISK_BUF_PTR_HI
+    STA FDC_SAVED_BUF_HI
+; 作用：FDC_TRANSFER_SECTOR 的一次尝试：设超时计数；格式化命令转 FDC_FORMAT_TRACK，否则寻道后发送读写命令的 9 个字节
+; 调用者：FDC_RETRY、FDC_TRANSFER_SECTOR（顺序执行到这里）
+FDC_TRANSFER_TRY:
+    LDA #$FC
+    STA FDC_TIMEOUT_2
+    STA FDC_TIMEOUT_1
+    STA FDC_TIMEOUT_0
+    LDA FDC_COMMAND
+    CMP #$4D
+    BNE @seek
+    JMP FDC_FORMAT_TRACK
+@seek:
+    JSR FDC_SEEK_IF_NEEDED
+    BCC @set_params
+    JMP FDC_FAIL
+@set_params:
+    LDA FDC_HEAD
+    ASL A
+    ASL A
+    STA FDC_DRIVE_HEAD
+    LDA #$02
+    STA FDC_SIZE_CODE
+    LDA FDC_SECTOR
+    STA FDC_END_SECTOR
+    LDA #$1B
+    STA FDC_GAP_LENGTH
+    LDA #$FF
+    STA FDC_DATA_LENGTH
+    SEI
+    LDA FDC_COMMAND
+    JSR FDC_WRITE_BYTE
+    BCC @command_sent
+    JMP FDC_FORMAT_FAIL
+@command_sent:
+    LDA FDC_COMMAND
+    CMP #$66
+    BEQ @clear_irq
+@clear_irq:
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$04
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDY #$00
+    LDX #$02
+    STX FDC_TRY_COUNT
+    LDA #$FF
+    STA FDC_TIMEOUT_2
+    LDA #$00
+    STA FDC_TIMEOUT_1
+    STA FDC_TIMEOUT_0
+    STA FDC_IRQ_FLAG
+    STA FDC_ERROR_FLAG
+    LDA FDC_DRIVE_HEAD
+    JSR FDC_WRITE_BYTE
+    BCS FDC_COMMAND_TIMEOUT
+    LDA FDC_TRACK
+    JSR FDC_WRITE_BYTE
+    BCS FDC_COMMAND_TIMEOUT
+    LDA FDC_HEAD
+    JSR FDC_WRITE_BYTE
+    BCS FDC_COMMAND_TIMEOUT
+    LDA FDC_SECTOR
+    JSR FDC_WRITE_BYTE
+    BCS FDC_COMMAND_TIMEOUT
+    LDA FDC_SIZE_CODE
+    JSR FDC_WRITE_BYTE
+    BCS FDC_COMMAND_TIMEOUT
+    LDA FDC_END_SECTOR
+    JSR FDC_WRITE_BYTE
+    BCS FDC_COMMAND_TIMEOUT
+    LDA FDC_GAP_LENGTH
+    JSR FDC_WRITE_BYTE
+    BCS FDC_COMMAND_TIMEOUT
+    JMP FDC_START_DATA_PHASE
+; 作用：读写命令字节发送超时，转 FDC_RETRY
+; 调用者：FDC_TRANSFER_TRY、FDC_START_DATA_PHASE
+FDC_COMMAND_TIMEOUT:
+    JMP FDC_RETRY
+; 作用：读扇区的数据阶段：逐字节从 FDC_DATA 存入 (DISK_BUF_PTR_LO)，满 256 字节换到 (DISK_BUF2_PTR_LO)，共 512 字节
+; 输出：读完 512 字节转 FDC_TRANSFER_DONE；超时或控制器提前结束则读结果字节后转 FDC_TRANSFER_ABORTED。
+; 调用者：FDC_READ_DATA_LOOP、FDC_START_DATA_PHASE
+FDC_READ_DATA_LOOP:
+    LDA FDC_STATUS
+    BPL FDC_READ_DATA_LOOP
+    AND #$20
+    BNE @first_byte
+    INC FDC_TIMEOUT_0
+    BNE FDC_READ_DATA_LOOP
+    INC FDC_TIMEOUT_1
+    BNE FDC_READ_DATA_LOOP
+    JMP @timeout
+@first_byte:
+    LDA FDC_DATA
+    STA (DISK_BUF_PTR_LO),Y
+    INY
+@read_first_page:
+    LDA FDC_STATUS
+    BPL @read_first_page
+    AND #$20
+    BEQ @data_ended
+    LDA FDC_DATA
+    STA (DISK_BUF_PTR_LO),Y
+    INY
+    BNE @read_first_page
+@read_second_page:
+    LDA FDC_STATUS
+    BPL @read_second_page
+    AND #$20
+    BEQ @data_ended
+    LDA FDC_DATA
+    STA (DISK_BUF2_PTR_LO),Y
+    INY
+    BNE @read_second_page
+    JMP FDC_TRANSFER_DONE
+@data_ended:
+    JSR FDC_READ_RESULT
+    JMP FDC_TRANSFER_ABORTED
+@timeout:
+    JSR FDC_READ_RESULT
+    JMP FDC_TRANSFER_ABORTED
+; 作用：写扇区的数据阶段：逐字节从 (DISK_BUF_PTR_LO)、(DISK_BUF2_PTR_LO) 写入 FDC_DATA，共 512 字节
+; 输出：写完 512 字节转 FDC_TRANSFER_DONE；超时或控制器提前结束则读结果字节后转 FDC_TRANSFER_ABORTED。
+; 调用者：FDC_WRITE_DATA_LOOP、FDC_START_DATA_PHASE
+FDC_WRITE_DATA_LOOP:
+    BIT FDC_STATUS
+    BPL FDC_WRITE_DATA_LOOP
+    BVC @first_byte
+    INC FDC_TIMEOUT_0
+    BNE FDC_WRITE_DATA_LOOP
+    INC FDC_TIMEOUT_1
+    BNE FDC_WRITE_DATA_LOOP
+    INC FDC_TIMEOUT_2
+    BNE FDC_WRITE_DATA_LOOP
+    JMP @abort
+@first_byte:
+    LDA (DISK_BUF_PTR_LO),Y
+    STA FDC_DATA
+    INY
+@write_first_page:
+    BIT FDC_STATUS
+    BPL @write_first_page
+    BVS @abort
+    LDA (DISK_BUF_PTR_LO),Y
+    STA FDC_DATA
+    INY
+    BNE @write_first_page
+@write_second_page:
+    BIT FDC_STATUS
+    BPL @write_second_page
+    BVS @abort
+    LDA (DISK_BUF2_PTR_LO),Y
+    STA FDC_DATA
+    INY
+    BNE @write_second_page
+    JMP FDC_TRANSFER_DONE
+@abort:
+    JSR FDC_READ_RESULT
+    JMP FDC_TRANSFER_ABORTED
+; 作用：数据传完后等控制器有结果，读 7 个结果字节并判断：因为没有终止计数信号，成功的读写以 ST0 位 6 置位（异常结束）且 ST1 为 $80（到达磁道末）或 $10（超限）结束，此时记下当前磁道与磁头，DISK_STATUS=0、C=0；否则按 ST0、ST1 的错误位（$25）置 DISK_STATUS=$17，A=8 转 FDC_RETRY。
+; 输出：DISK_STATUS 与 C。
+; 调用者：FDC_READ_DATA_LOOP、FDC_WRITE_DATA_LOOP、FDC_TRANSFER_DONE
+FDC_TRANSFER_DONE:
+    LDA FDC_STATUS
+    BPL FDC_TRANSFER_DONE
+    JSR FDC_READ_RESULT
+    JMP @check_command
+@check_command:
+    LDA FDC_COMMAND
+    CMP #$66
+    BEQ @check_st0
+    CMP #$45
+    BEQ @check_st0
+@check_st0:
+    LDA FDC_RESULT_0
+    AND #$40
+    CMP #$40
+    BNE @check_errors
+    LDA FDC_RESULT_1
+    CMP #$80
+    BEQ @success
+    CMP #$10
+    BEQ @success
+    JMP @check_errors
+@success:
+    LDA FDC_TRACK
+    STA FDC_CURRENT_TRACK
+    LDA FDC_HEAD
+    STA FDC_SEEK_HEAD
+    LDA #$00
+    STA DISK_STATUS
+    CLC
+    RTS
+@check_errors:
+    ORA FDC_RESULT_1
+    AND #$25
+    BEQ @retry_code
+    LDA #$17
+    STA DISK_STATUS
+@retry_code:
+    LDA #$08
+    JMP FDC_RETRY
+; 作用：数据阶段被控制器提前终止：按结果字节给出 DISK_STATUS（写保护 $13、读写出错 $17、ST1 位 4 为 $2B），转 FDC_RETRY
+; 调用者：FDC_READ_DATA_LOOP、FDC_WRITE_DATA_LOOP
+FDC_TRANSFER_ABORTED:
+    SEI
+    LDA FDC_RESULT_0
+    AND #$40
+    CMP #$40
+    BNE FDC_RETRY
+    LDA FDC_RESULT_1
+    AND #$02
+    BEQ @check_errors
+    LDA #$13
+    STA DISK_STATUS
+    SEC
+    RTS
+@check_errors:
+    LDA FDC_RESULT_1
+    AND #$25
+    BEQ @check_st2
+@set_error:
+    LDA #$17
+    STA DISK_STATUS
+    JMP FDC_RETRY
+@check_st2:
+    LDA FDC_RESULT_2
+    AND #$21
+    BNE @set_error
+    LDA FDC_RESULT_1
+    AND #$10
+    BEQ FDC_RETRY
+    LDA #$2B
+    STA DISK_STATUS
+    JMP FDC_RETRY
+    SEC
+    RTS
+; 作用：出错重试：内层 3 次（复位控制器、检测盘片后回到 FDC_TRANSFER_TRY）用完后，外层计数 FDC_OUTER_RETRIES 减 1（FDC_RETRY_MODE 位 7 为 1 时只有 1 轮，否则 3 轮）并重新寻道；全部用完转 FDC_FAIL
+; 调用者：FDC_SEEK_IF_NEEDED、FDC_FORMAT_TRACK、FDC_FORMAT_FAIL、FDC_FORMAT_CHECK_RESULT、FDC_FORMAT_ABORTED、FDC_COMMAND_TIMEOUT、FDC_TRANSFER_DONE、FDC_TRANSFER_ABORTED
+FDC_RETRY:
+    DEC FDC_INNER_RETRIES
+    BEQ @next_round
+    JSR FDC_RESET_CONTROLLER
+    BCS FDC_FAIL
+    JSR FDC_DETECT_MEDIA
+    BCC @restart
+    LDA DISK_STATUS
+    CMP #$15
+    BEQ FDC_FAIL
+@restart:
+    LDA FDC_SAVED_BUF_LO
+    STA DISK_BUF_PTR_LO
+    LDA FDC_SAVED_BUF_HI
+    STA DISK_BUF_PTR_HI
+    JMP FDC_TRANSFER_TRY
+@next_round:
+    LDA #$01
+    STA FDC_INNER_RETRIES
+    DEC FDC_OUTER_RETRIES
+    BEQ FDC_FAIL
+    LDA FDC_TRACK
+    STA FDC_SEEK_TRACK
+    JSR FDC_SEEK
+    BCS FDC_FAIL
+    JMP @restart
+; 作用：最终失败：DISK_STATUS 为 0 时置 $15，C=1 返回
+; 调用者：FDC_TRANSFER_SECTOR、FDC_TRANSFER_TRY、FDC_RETRY、FDC_DETECT_MEDIA
+FDC_FAIL:
+    LDA DISK_STATUS
+    BNE @return_set
+    LDA #$15
+    STA DISK_STATUS
+@return_set:
+    SEC
+    RTS
+; 作用：命令字节发完后进入数据阶段：$66（读扇区）转 FDC_READ_DATA_LOOP，$45（写扇区）转 FDC_WRITE_DATA_LOOP，其他命令 DISK_STATUS=$10、C=1
+; 调用者：FDC_TRANSFER_TRY
+FDC_START_DATA_PHASE:
+    LDA FDC_COMMAND
+    CMP #$66
+    BEQ @read_command
+    CMP #$45
+    BEQ @write_command
+    LDA #$10
+    STA DISK_STATUS
+    SEC
+    RTS
+@timeout:
+    JMP FDC_COMMAND_TIMEOUT
+@read_command:
+    LDA DISK_BUF_PTR_LO
+    STA DISK_BUF2_PTR_LO
+    LDA DISK_BUF_PTR_HI
+    CLC
+    ADC #$01
+    STA DISK_BUF2_PTR_HI
+    LDY #$00
+    LDA FDC_DATA_LENGTH
+    JSR FDC_WRITE_BYTE
+    BCS @timeout
+    JMP FDC_READ_DATA_LOOP
+@write_command:
+    LDA DISK_BUF_PTR_LO
+    STA DISK_BUF2_PTR_LO
+    LDA DISK_BUF_PTR_HI
+    CLC
+    ADC #$01
+    STA DISK_BUF2_PTR_HI
+    LDY #$00
+    LDA (DISK_BUF_PTR_LO),Y
+    PHA
+    LDA FDC_DATA_LENGTH
+    JSR FDC_WRITE_BYTE
+    PLA
+    BCS @timeout
+    JMP FDC_WRITE_DATA_LOOP
+; 作用：软驱控制器复位：延时，FDC_CONTROL 连写 4 次 $1C 放开复位，再延时，然后做 FDC_SPECIFY_INIT
+; 输出：C=0 成功，C=1 失败。
+; 调用者：FDC_RETRY
+FDC_RESET_CONTROLLER:
+    LDA #$00
+    JSR DELAY_COUNTDOWN
+    LDA #$1C
+    STA FDC_CONTROL
+    STA FDC_CONTROL
+    STA FDC_CONTROL
+    STA FDC_CONTROL
+    LDA #$80
+    JSR FDC_DELAY
+    JSR FDC_SPECIFY_INIT
+    RTS
+    JSR FDC_RECALIBRATE
+    BCC FDC_SEEK_RETRY
+    SEC
+    RTS
+; 作用：发 SEEK（$0F）命令寻道到 FDC_SEEK_TRACK 指定的磁道（磁头取 FDC_SEEK_HEAD），最多重试 6 次；落入 FDC_SEEK_RETRY。
+; 输入：FDC_SEEK_HEAD、FDC_SEEK_TRACK。
+; 输出：C=0 成功（FDC_CURRENT_TRACK 更新），C=1 失败（DISK_STATUS=$15）。
+; 调用者：FDC_SEEK_IF_NEEDED、FDC_FORMAT_TRACK、FDC_RETRY
+FDC_SEEK:
+    CLI
+    LDA #$06
+    STA FDC_SEEK_RETRIES
+; 作用：SEEK 的重试入口：FDC_ISR_MODE 清 0，清中断标志，发命令 $0F、磁头号（左移 2 位）与目标磁道，等中断；FDC_RESULT_0 位 5（寻道结束）置位且 FDC_RESULT_1（当前磁道）等于目标磁道算成功，延时后记下 FDC_CURRENT_TRACK；否则重试，用完 FDC_SEEK_RETRIES 次后失败。
+; 输出：C=0 成功，C=1 失败（DISK_STATUS=$15）。
+; 调用者：FDC_RESET_CONTROLLER、FDC_SEEK_RETRY、FDC_SEEK（顺序执行到这里）
+FDC_SEEK_RETRY:
+    LDA #$00
+    STA FDC_ISR_MODE
+    JSR FDC_CLEAR_IRQ
+    LDA #$0F
+    JSR FDC_WRITE_BYTE
+    BCS @fail
+    LDA FDC_SEEK_HEAD
+    ASL A
+    ASL A
+    JSR FDC_WRITE_BYTE
+    BCS @fail
+    LDA FDC_SEEK_TRACK
+    JSR FDC_WRITE_BYTE
+    BCS @fail
+    JSR FDC_WAIT_IRQ
+    BCS @fail
+    LDA FDC_RESULT_0
+    AND #$20
+    BEQ @retry
+    LDA FDC_SEEK_TRACK
+    CMP FDC_RESULT_1
+    BEQ @done
+@retry:
+    DEC FDC_SEEK_RETRIES
+    BNE FDC_SEEK_RETRY
+@fail:
+    LDA #$15
+    STA DISK_STATUS
+    SEC
+    RTS
+@done:
+    LDA #$30
+    JSR FDC_DELAY
+    LDA FDC_SEEK_TRACK
+    STA FDC_CURRENT_TRACK
+    CLC
+    RTS
+; 作用：发 READ ID（$4A）检测盘片：等中断超时且没有出错标志时说明没有盘，DISK_STATUS=$18；控制器报出错（FDC_RESULT_1 的位 0 或位 2，即找不到地址标志）时 DISK_STATUS=$1A（未知类型）；命令发不出去等其他失败 DISK_STATUS=$15；成功 DISK_STATUS=0。
+; 输出：C=0 成功，C=1 失败，DISK_STATUS。
+; 调用者：FDC_RETRY、DISK_FORMAT_TRACK、DISK_READ_SECTORS、DISK_READ_SECTOR_BUFFER、DISK_WRITE_SECTORS、DISK_WRITE_SECTOR_BUFFER
+FDC_DETECT_MEDIA:
+    LDA #$01
+    STA FDC_TRY_COUNT
+    JSR FDC_ENSURE_STARTED
+    BNE @read_id
+    BCS @start_failed
+    BCC @read_id
+@start_failed:
+    JMP FDC_FAIL
+@read_id:
+    LDA #$01
+    STA FDC_ISR_MODE
+    LDA #$4A
+    JSR FDC_WRITE_BYTE
+    BCS @not_ready
+    JSR FDC_CLEAR_IRQ
+    LDA #$00
+    JSR FDC_WRITE_BYTE
+    BCS @not_ready
+    JSR FDC_WAIT_IRQ_SHORT
+    BCC @got_irq
+    LDA FDC_ERROR_FLAG
+    BNE @not_ready
+    BEQ @no_disk
+@got_irq:
+    LDA FDC_RESULT_1
+    AND #$05
+    BEQ @media_ok
+    DEC FDC_TRY_COUNT
+    BNE @read_id
+    LDA #$1A
+    STA DISK_STATUS
+    SEC
+    RTS
+@no_disk:
+    LDA #$18
+    STA DISK_STATUS
+    SEC
+    RTS
+@media_ok:
+    LDA #$00
+    STA DISK_STATUS
+    CLC
+    RTS
+@not_ready:
+    LDA #$15
+    STA DISK_STATUS
+    SEC
+    RTS
+; 作用：延时：A 递减到 0 为止。
+; 输入：A=计数初值（0 表示 256 次）。
+; 调用者：FDC_RESET_CONTROLLER、DELAY_COUNTDOWN
+DELAY_COUNTDOWN:
+    SEC
+    SBC #$01
+    BNE DELAY_COUNTDOWN
+    RTS
+; 作用：把 DISK_HEAD、DISK_TRACK 复制到 FDC_HEAD、FDC_TRACK，并检查范围：磁头小于 2 且磁道小于 $50（80）才合法，否则 DISK_STATUS=$10。
+; 输入：DISK_HEAD、DISK_TRACK。
+; 输出：C=0 合法，C=1 越界。
+; 调用者：DISK_FORMAT_TRACK
+FDC_CHECK_CHS:
+    LDA DISK_HEAD
+    STA FDC_HEAD
+    LDA DISK_TRACK
+    STA FDC_TRACK
+    LDA FDC_HEAD
+    CMP #$02
+    BCS @out_of_range
+    LDA FDC_TRACK
+    CMP #$50
+    BCS @out_of_range
+    CLC
+    RTS
+@out_of_range:
+    LDA #$10
+    STA DISK_STATUS
+    SEC
+    RTS
+; 作用：磁盘服务 $80 子功能 1：格式化 DISK_HEAD、DISK_TRACK 指定的磁道。先检查范围（FDC_CHECK_CHS），再用功能 $1E 查出 NMI 标志与中断掩码存入 DISK_SAVED_NMI_FLAGS、DISK_SAVED_IRQ_MASK，用功能 $12、$13 逐项关掉；检测盘片（FDC_DETECT_MEDIA）后用 FDC_TRANSFER_SECTOR（命令 $4D）格式化；最后按保存值逐项重新打开（NMI 一侧各位依次是打开 NMI、条带动画、声音更新、两个钩子、读手柄、调色板复制），成功失败都恢复。
+; 输入：DISK_HEAD、DISK_TRACK。
+; 输出：C=0 成功，C=1 失败，DISK_STATUS。
+; 调用者：GROUP_5C_DISPATCH_80（地址表）
+DISK_FORMAT_TRACK:
+    JSR FDC_CHECK_CHS
+    BCC @checked
+    JMP @return_set
+@checked:
+    LDA #$1E
+    STA SYS_FUNCTION
+    LDA #$07
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_0F
+    STA DISK_SAVED_NMI_FLAGS
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$00
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$01
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$02
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$03
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$04
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$05
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$1E
+    STA SYS_FUNCTION
+    LDA #$08
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_0F
+    STA DISK_SAVED_IRQ_MASK
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$00
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$01
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$02
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$03
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$04
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$05
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$06
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    JSR FDC_DETECT_MEDIA
+    BCC @format
+    JMP @fail_nmi
+@format:
+    LDA #$4D
+    STA FDC_COMMAND
+    JSR FDC_TRANSFER_SECTOR
+    BCC @restore_nmi
+    JMP @fail_nmi
+@restore_nmi:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$01
+    BEQ @restore_strip
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$80
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@restore_strip:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$80
+    BEQ @restore_sound
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$81
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@restore_sound:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$40
+    BEQ @restore_hook5
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$82
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@restore_hook5:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$20
+    BEQ @restore_hook4
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$83
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@restore_hook4:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$10
+    BEQ @restore_pad
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$84
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@restore_pad:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$08
+    BEQ @restore_palette
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$85
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@restore_palette:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$02
+    BEQ @restore_irq
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$86
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@restore_irq:
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$80
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA DISK_SAVED_IRQ_MASK
+    AND #$40
+    BNE @restore_irq_82
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$81
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@restore_irq_82:
+    LDA DISK_SAVED_IRQ_MASK
+    AND #$20
+    BNE @restore_irq_83
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$82
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@restore_irq_83:
+    LDA DISK_SAVED_IRQ_MASK
+    AND #$10
+    BNE @restore_irq_84
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$83
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@restore_irq_84:
+    LDA DISK_SAVED_IRQ_MASK
+    AND #$08
+    BNE @restore_irq_85
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$84
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@restore_irq_85:
+    LDA DISK_SAVED_IRQ_MASK
+    AND #$04
+    BNE @restore_irq_86
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$85
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@restore_irq_86:
+    LDA DISK_SAVED_IRQ_MASK
+    AND #$02
+    BNE @return_clear
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$86
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@return_clear:
+    CLC
+    RTS
+@fail_nmi:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$01
+    BEQ @fail_strip
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$80
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@fail_strip:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$80
+    BEQ @fail_sound
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$81
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@fail_sound:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$40
+    BEQ @fail_hook5
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$82
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@fail_hook5:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$20
+    BEQ @fail_hook4
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$83
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@fail_hook4:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$10
+    BEQ @fail_pad
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$84
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@fail_pad:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$08
+    BEQ @fail_palette
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$85
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@fail_palette:
+    LDA DISK_SAVED_NMI_FLAGS
+    AND #$02
+    BEQ @fail_irq
+    LDA #$12
+    STA SYS_FUNCTION
+    LDA #$86
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@fail_irq:
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$80
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA DISK_SAVED_IRQ_MASK
+    AND #$40
+    BNE @fail_irq_82
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$81
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@fail_irq_82:
+    LDA DISK_SAVED_IRQ_MASK
+    AND #$20
+    BNE @fail_irq_83
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$82
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@fail_irq_83:
+    LDA DISK_SAVED_IRQ_MASK
+    AND #$10
+    BNE @fail_irq_84
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$83
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@fail_irq_84:
+    LDA DISK_SAVED_IRQ_MASK
+    AND #$08
+    BNE @fail_irq_85
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$84
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@fail_irq_85:
+    LDA DISK_SAVED_IRQ_MASK
+    AND #$04
+    BNE @fail_irq_86
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$85
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@fail_irq_86:
+    LDA DISK_SAVED_IRQ_MASK
+    AND #$02
+    BNE @return_set
+    LDA #$13
+    STA SYS_FUNCTION
+    LDA #$86
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+@return_set:
+    SEC
+    RTS

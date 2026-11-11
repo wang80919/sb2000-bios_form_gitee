@@ -1,0 +1,862 @@
+; 作用：------------------------------------------------------------------------
+; 名称：lyrics-scroll.asm
+; 说明：卡拉 OK 歌词滚动（功能 $66）：文字排版、条带动画队列与曲子配合
+; 作者：sungbin
+; 邮箱：sungbin@3578.cn
+; 日期：2026-11-09
+; 备注：在 ROM 里接在 display/text-to-buffer.asm 之后
+; ------------------------------------------------------------------------
+; 功能 $66：卡拉 OK 歌词滚动显示（KARAOK.EXE 调用）；分发器直接进入 $8700，不经入口内联表：
+; 先设置条带绘制参数（TEXT_SETUP_DRAW），$65/$02 停止声音、$65/$09 起播曲子，初始化文字排版状态，逐行建下一行直到 TEXT_BUILD_NEXT_LINE 返回非 0，再反复调用 $65/$03 直到 $0653 非 0（曲子播完），$65/$02 停止声音，NMI_FLAGS（$0630）高 2 位清 0
+; 调用者：全 ROM 没有指令或地址表引用它（只能由外部直接进入）
+API_66:
+    JSR TEXT_SETUP_DRAW
+    LDA #$02
+    STA SYS_SUBFUNCTION
+    LDA #$65
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    LDA #$09
+    STA SYS_SUBFUNCTION
+    LDA #$65
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    JSR TEXT_INIT_STATE
+@loop:
+    JSR TEXT_BUILD_NEXT_LINE
+    CMP #$00
+    BNE @wait_song_end
+    JMP @loop
+@wait_song_end:
+    LDA #$03
+    STA SYS_SUBFUNCTION
+    LDA #$65
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_10
+    BEQ @wait_song_end
+    LDA #$02
+    STA SYS_SUBFUNCTION
+    LDA #$65
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    LDA NMI_FLAGS
+    AND #$3F
+    STA NMI_FLAGS
+    RTS
+; 作用：初始化文字排版状态：LYRIC_PTR 取歌词数据起点，清两个位置栈与层数，两行显示地址取 LYRIC_ROW0_ADDR，再两次解析一行并两次建下一行，最后打开 NMI 条带动画
+; 调用者：API_66
+TEXT_INIT_STATE:
+    LDA LYRIC_PTR_LO
+    STA LYRIC_DATA_BASE_LO
+    LDA LYRIC_PTR_HI
+    STA LYRIC_DATA_BASE_HI
+    LDA LYRIC_DATA_BASE_LO
+    STA LYRIC_BACK_PTR_LO
+    STA LYRIC_LINE_PTR_LO
+    LDA LYRIC_DATA_BASE_HI
+    STA LYRIC_BACK_PTR_HI
+    STA LYRIC_LINE_PTR_HI
+    LDA #$00
+    STA LYRIC_BACK_END_LO
+    STA LYRIC_BACK_END_HI
+    STA LYRIC_LINE_END_LO
+    STA LYRIC_LINE_END_HI
+    STA LYRIC_DEPTH_A
+    STA LYRIC_DEPTH_B
+    LDA #$00
+    STA LYRIC_END_FLAG
+    LDA LYRIC_ROW0_ADDR_LO
+    STA LYRIC_ROW_ADDR_LO
+    STA LYRIC_POSITION_LO
+    LDA LYRIC_ROW0_ADDR_HI
+    STA LYRIC_ROW_ADDR_HI
+    STA LYRIC_POSITION_HI
+    LDA #$00
+    STA LYRIC_BUILD_FLAG
+    JSR TEXT_PARSE_LINE
+    JSR TEXT_PARSE_LINE
+    LDA #$00
+    STA BAR_READ_INDEX
+    STA BAR_WRITE_INDEX
+    JSR TEXT_BUILD_NEXT_LINE
+    JSR TEXT_BUILD_NEXT_LINE
+    LDA #$01
+    STA BAR_DELAY
+    LDA #$00
+    STA BAR_FRAME
+    LDA #$FF
+    STA BAR_TEMPO_ACC
+    LDA #$C0
+    ORA NMI_FLAGS
+    STA NMI_FLAGS
+    RTS
+; 作用：位置栈 A 入栈：LYRIC_STACK_A 前 4 个字节下推到后 4 个字节，装入当前往前解析的指针与结束位置，LYRIC_DEPTH_A 加 1
+; 调用者：TEXT_PARSE_BACK
+TEXT_PUSH_A:
+    LDA LYRIC_STACK_A
+    STA LYRIC_STACK_A+4
+    LDA LYRIC_STACK_A+1
+    STA LYRIC_STACK_A+5
+    LDA LYRIC_STACK_A+2
+    STA LYRIC_STACK_A+6
+    LDA LYRIC_STACK_A+3
+    STA LYRIC_STACK_A+7
+    LDA LYRIC_BACK_PTR_LO
+    STA LYRIC_STACK_A
+    LDA LYRIC_BACK_PTR_HI
+    STA LYRIC_STACK_A+1
+    LDA LYRIC_BACK_END_LO
+    STA LYRIC_STACK_A+2
+    LDA LYRIC_BACK_END_HI
+    STA LYRIC_STACK_A+3
+    INC LYRIC_DEPTH_A
+    RTS
+; 作用：位置栈 A 出栈：与 TEXT_PUSH_A 相反，LYRIC_DEPTH_A 减 1
+; 调用者：TEXT_PARSE_BACK
+TEXT_POP_A:
+    LDA LYRIC_STACK_A
+    STA LYRIC_BACK_PTR_LO
+    LDA LYRIC_STACK_A+1
+    STA LYRIC_BACK_PTR_HI
+    LDA LYRIC_STACK_A+2
+    STA LYRIC_BACK_END_LO
+    LDA LYRIC_STACK_A+3
+    STA LYRIC_BACK_END_HI
+    LDA LYRIC_STACK_A+4
+    STA LYRIC_STACK_A
+    LDA LYRIC_STACK_A+5
+    STA LYRIC_STACK_A+1
+    LDA LYRIC_STACK_A+6
+    STA LYRIC_STACK_A+2
+    LDA LYRIC_STACK_A+7
+    STA LYRIC_STACK_A+3
+    DEC LYRIC_DEPTH_A
+    RTS
+; 作用：位置栈 B 入栈：LYRIC_STACK_B 前 4 个字节下推到后 4 个字节，装入当前逐行解析的指针与结束位置，LYRIC_DEPTH_B 加 1
+; 调用者：TEXT_PARSE_LINE
+TEXT_PUSH_B:
+    LDA LYRIC_STACK_B
+    STA LYRIC_STACK_B+4
+    LDA LYRIC_STACK_B+1
+    STA LYRIC_STACK_B+5
+    LDA LYRIC_STACK_B+2
+    STA LYRIC_STACK_B+6
+    LDA LYRIC_STACK_B+3
+    STA LYRIC_STACK_B+7
+    LDA LYRIC_LINE_PTR_LO
+    STA LYRIC_STACK_B
+    LDA LYRIC_LINE_PTR_HI
+    STA LYRIC_STACK_B+1
+    LDA LYRIC_LINE_END_LO
+    STA LYRIC_STACK_B+2
+    LDA LYRIC_LINE_END_HI
+    STA LYRIC_STACK_B+3
+    INC LYRIC_DEPTH_B
+    RTS
+; 作用：位置栈 B 出栈：与 TEXT_PUSH_B 相反，LYRIC_DEPTH_B 减 1
+; 调用者：TEXT_PARSE_LINE
+TEXT_POP_B:
+    LDA LYRIC_STACK_B
+    STA LYRIC_LINE_PTR_LO
+    LDA LYRIC_STACK_B+1
+    STA LYRIC_LINE_PTR_HI
+    LDA LYRIC_STACK_B+2
+    STA LYRIC_LINE_END_LO
+    LDA LYRIC_STACK_B+3
+    STA LYRIC_LINE_END_HI
+    LDA LYRIC_STACK_B+4
+    STA LYRIC_STACK_B
+    LDA LYRIC_STACK_B+5
+    STA LYRIC_STACK_B+1
+    LDA LYRIC_STACK_B+6
+    STA LYRIC_STACK_B+2
+    LDA LYRIC_STACK_B+7
+    STA LYRIC_STACK_B+3
+    DEC LYRIC_DEPTH_B
+    RTS
+; 作用：建下一行：必要时先 TEXT_PARSE_LINE 解析文字，再 TEXT_PARSE_BACK 得到下一项的长度（LYRIC_LENGTH），按类型把条带命令逐块排入条带队列（每块最多 $FF）
+; 输出：A=0 表示已排入一项，$FF 表示歌词结束或类型无效。
+; 调用者：API_66、TEXT_INIT_STATE
+TEXT_BUILD_NEXT_LINE:
+    LDA BAR_LINE_FLAG
+    BNE @parse_back
+    LDA #$FF
+    STA LYRIC_BUILD_FLAG
+    JSR TEXT_PARSE_LINE
+@parse_back:
+    JSR TEXT_PARSE_BACK
+    LDA LYRIC_ITEM_KIND
+    BNE @check_end
+@loop:
+    LDA #$80
+    STA BAR_CMD_OP
+    LDA LYRIC_LENGTH_HI
+    BEQ @last_block
+    LDA #$FF
+    STA BAR_CMD_COUNT
+    LDA LYRIC_LENGTH_LO
+    SEC
+    SBC #$FF
+    STA LYRIC_LENGTH_LO
+    LDA LYRIC_LENGTH_HI
+    SBC #$00
+    STA LYRIC_LENGTH_HI
+    JSR BAR_QUEUE_COMMAND
+    JMP @loop
+@last_block:
+    LDA LYRIC_LENGTH_LO
+    STA BAR_CMD_COUNT
+    JSR BAR_QUEUE_COMMAND
+    LDA #$00
+    RTS
+@check_end:
+    CMP #$FF
+    BNE @calc_bar
+    RTS
+@calc_bar:
+    JSR BAR_CALC_ADDR
+    LDA LYRIC_ITEM_KIND
+    CMP #$01
+    BNE @check_wide
+    JSR BAR_SPLIT_LENGTH
+    LDA #$00
+    RTS
+@check_wide:
+    CMP #$02
+    BNE @bad_kind
+    LDA LYRIC_LENGTH_LO
+    AND #$01
+    STA LYRIC_REMAINDER
+    LSR LYRIC_LENGTH_HI
+    ROR LYRIC_LENGTH_LO
+    LDA LYRIC_LENGTH_HI
+    PHA
+    LDA LYRIC_LENGTH_LO
+    PHA
+    CLC
+    ADC LYRIC_REMAINDER
+    STA LYRIC_LENGTH_LO
+    LDA LYRIC_LENGTH_HI
+    ADC #$00
+    STA LYRIC_LENGTH_HI
+    JSR BAR_SPLIT_LENGTH
+    PLA
+    STA LYRIC_LENGTH_LO
+    PLA
+    STA LYRIC_LENGTH_HI
+    LDA BAR_ERASE_MODE
+    BNE @wide_erase_offset
+    LDA LYRIC_BAR_ADDR_LO
+    CLC
+    ADC #$20
+    STA LYRIC_BAR_ADDR_LO
+    LDA LYRIC_BAR_ADDR_HI
+    ADC #$00
+    STA LYRIC_BAR_ADDR_HI
+    JMP @wide_second_half
+@wide_erase_offset:
+    LDA LYRIC_BAR_ADDR_LO
+    CLC
+    ADC #$10
+    STA LYRIC_BAR_ADDR_LO
+    LDA LYRIC_BAR_ADDR_HI
+    ADC #$00
+    STA LYRIC_BAR_ADDR_HI
+@wide_second_half:
+    JSR BAR_SPLIT_LENGTH
+    LDA #$00
+    RTS
+@bad_kind:
+    LDA #$FF
+    RTS
+; 作用：LYRIC_POSITION 乘 16 再加 8，结果存 LYRIC_BAR_ADDR（条带的显示地址）
+; 调用者：TEXT_BUILD_NEXT_LINE
+BAR_CALC_ADDR:
+    LDA LYRIC_POSITION_LO
+    STA LYRIC_BAR_ADDR_LO
+    LDA LYRIC_POSITION_HI
+    STA LYRIC_BAR_ADDR_HI
+    LDX #$04
+@loop:
+    LDA LYRIC_BAR_ADDR_LO
+    CLC
+    ADC LYRIC_BAR_ADDR_LO
+    STA LYRIC_BAR_ADDR_LO
+    LDA LYRIC_BAR_ADDR_HI
+    ADC LYRIC_BAR_ADDR_HI
+    STA LYRIC_BAR_ADDR_HI
+    DEX
+    BNE @loop
+    LDA LYRIC_BAR_ADDR_LO
+    CLC
+    ADC #$08
+    STA LYRIC_BAR_ADDR_LO
+    LDA LYRIC_BAR_ADDR_HI
+    ADC #$00
+    STA LYRIC_BAR_ADDR_HI
+    RTS
+; 作用：把长度 LYRIC_LENGTH 拆成整块（除以 8）与零头 LYRIC_REMAINDER：整块逐个入队，零头按条带图案入队，并推进 LYRIC_POSITION
+; 调用者：TEXT_BUILD_NEXT_LINE
+BAR_SPLIT_LENGTH:
+    LDA LYRIC_LENGTH_LO
+    AND #$07
+    STA LYRIC_REMAINDER
+    LSR LYRIC_LENGTH_HI
+    ROR LYRIC_LENGTH_LO
+    LSR LYRIC_LENGTH_HI
+    ROR LYRIC_LENGTH_LO
+    LSR LYRIC_LENGTH_HI
+    ROR LYRIC_LENGTH_LO
+    LDA LYRIC_LENGTH_LO
+    BNE @whole_blocks
+    LDX #$00
+@single_loop:
+    STX BAR_CMD_OP
+    LDA LYRIC_REMAINDER
+    CMP #$02
+    BCC @partial_bar
+    LDA #$01
+    STA BAR_CMD_COUNT
+    LDA LYRIC_BAR_ADDR_LO
+    STA BAR_CMD_ADDR_LO
+    LDA LYRIC_BAR_ADDR_HI
+    STA BAR_CMD_ADDR_HI
+    JSR BAR_QUEUE_COMMAND
+    INX
+    DEC LYRIC_REMAINDER
+    JMP @single_loop
+@partial_bar:
+    LDA #$07
+    STA BAR_CMD_OP
+    LDA LYRIC_REMAINDER
+    STA BAR_CMD_COUNT
+    LDA LYRIC_BAR_ADDR_LO
+    STA BAR_CMD_ADDR_LO
+    LDA LYRIC_BAR_ADDR_HI
+    STA BAR_CMD_ADDR_HI
+    JSR BAR_QUEUE_COMMAND
+    JSR BAR_ADDR_INC
+    JSR BAR_ADDR_INC
+    RTS
+@whole_blocks:
+    LDX #$00
+@block_loop:
+    STX BAR_CMD_OP
+    LDA LYRIC_LENGTH_LO
+    STA BAR_CMD_COUNT
+    LDA LYRIC_REMAINDER
+    BEQ @queue_block
+    INC BAR_CMD_COUNT
+    DEC LYRIC_REMAINDER
+@queue_block:
+    LDA LYRIC_BAR_ADDR_LO
+    STA BAR_CMD_ADDR_LO
+    LDA LYRIC_BAR_ADDR_HI
+    STA BAR_CMD_ADDR_HI
+    JSR BAR_QUEUE_COMMAND
+    INX
+    CPX #$08
+    BNE @block_loop
+    JSR BAR_ADDR_INC
+    JSR BAR_ADDR_INC
+    RTS
+; 作用：向 NMI 条带动画（NMI_BAR_ANIMATION）的环形队列 BAR_QUEUE 追加一项 4 字节命令（BAR_CMD_OP 起），写指针 BAR_WRITE_INDEX，读指针 BAR_READ_INDEX，队满时等待
+; 调用者：TEXT_BUILD_NEXT_LINE、BAR_SPLIT_LENGTH、TEXT_PARSE_BACK
+BAR_QUEUE_COMMAND:
+    LDA BAR_WRITE_INDEX
+    TAY
+    CLC
+    ADC #$04
+@wait_space:
+    CMP BAR_READ_INDEX
+    BNE @enqueue
+    JMP @wait_space
+@enqueue:
+    PHA
+    LDA BAR_CMD_OP
+    STA BAR_QUEUE,Y
+    LDA BAR_CMD_COUNT
+    STA BAR_QUEUE+1,Y
+    LDA BAR_CMD_ADDR_LO
+    STA BAR_QUEUE+2,Y
+    LDA BAR_CMD_ADDR_HI
+    STA BAR_QUEUE+3,Y
+    PLA
+    STA BAR_WRITE_INDEX
+    RTS
+; 作用：LYRIC_PTR_LO 加 1，进位时 LYRIC_PTR_HI 加 1；调用 28 次
+; 调用者：TEXT_PARSE_LINE、TEXT_PARSE_BACK
+ZP32_INC:
+    INC LYRIC_PTR_LO
+    BEQ @carry
+    RTS
+@carry:
+    INC LYRIC_PTR_HI
+    RTS
+; 作用：歌词文字流的格式（用例 verify/cases/p0f-lyrics.mjs 逐字节核对）：ASCII 字符 [字符, 时长]，汉字 [GB2312 高字节, 低字节, 时长]，时长后可跟若干 [$80, 附加时长]（时长相加，可超过 255）；
+; $00 空白 [$00, 时长]；$20 空格 [$20, 时长]，时长为 0 的空格只把位置推进 2；$5E “^” 在子段外显示成 A1F1 并按汉字算、在子段里按空白算；$9D 换行（一行最多 28 个字节，不足补空格）；
+; $8E 调用子段 [$8E, 起点偏移 2 字节, 终点偏移 2 字节]（偏移相对 LYRIC_DATA_BASE，读到终点后回到调用之后继续，最多两层）；$FF 结束。
+; 超长行：一行超过 28 个字节时，补空格的循环让 X 绕过 $FF，把 LYRIC_LINE_BUFFER 之后的 $05CB-$06AD（含位置栈、往前解析指针和 WINDOW_SAVE_0）全写成 $20，随后的功能 $3C 调用页组变成 $20，不再回到本例程尾部（实机核对）；$81-$9C 里不认识的控制码在逐行解析里当 1 字节字符、往前解析里只跳过 1 字节，两个解析会不同步（实机核对）
+; 从 LYRIC_LINE_PTR 起解析歌词数据：逐字节取数（TEXT_FETCH_BYTE），按控制码（$80、$8E、$9D、$5E、$FF）分流，把可显示字符放进 LYRIC_LINE_BUFFER，遇 $9D 补空格并调用功能 $3C 画出这一行
+; 调用者：TEXT_INIT_STATE、TEXT_BUILD_NEXT_LINE
+TEXT_PARSE_LINE:
+    LDX #$00
+    LDA LYRIC_LINE_PTR_LO
+    STA LYRIC_PTR_LO
+    LDA LYRIC_LINE_PTR_HI
+    STA LYRIC_PTR_HI
+@loop:
+    LDA LYRIC_PTR_LO
+    CMP LYRIC_LINE_END_LO
+    BNE @fetch
+    LDA LYRIC_PTR_HI
+    CMP LYRIC_LINE_END_HI
+    BNE @fetch
+    JSR TEXT_POP_B
+    LDA LYRIC_LINE_PTR_LO
+    STA LYRIC_PTR_LO
+    LDA LYRIC_LINE_PTR_HI
+    STA LYRIC_PTR_HI
+@fetch:
+    JSR TEXT_FETCH_BYTE
+    BEQ @skip_byte
+    CMP #$FF
+    BEQ @end_of_data
+    CMP #$80
+    BEQ @skip_byte
+    CMP #$8E
+    BEQ @call_subsection
+    CMP #$9D
+    BNE @check_caret
+    JMP @newline
+@check_caret:
+    CMP #$5E
+    BNE @store_char
+    LDA LYRIC_DEPTH_B
+    BNE @skip_byte
+@caret_loop:
+    LDA #$A1
+    STA LYRIC_LINE_BUFFER,X
+    INX
+    LDA #$F1
+    STA LYRIC_LINE_BUFFER,X
+    INX
+    JSR ZP32_INC
+    JSR ZP32_INC
+    JSR TEXT_FETCH_BYTE
+    CMP #$5E
+    BEQ @caret_loop
+    JMP @loop
+@store_char:
+    STA LYRIC_LINE_BUFFER,X
+    CMP #$A0
+    BCS @store_wide
+    INX
+    JSR ZP32_INC
+    JSR ZP32_INC
+    JMP @loop
+@store_wide:
+    INX
+    JSR ZP32_INC
+    JSR TEXT_FETCH_BYTE
+    STA LYRIC_LINE_BUFFER,X
+    INX
+    JSR ZP32_INC
+    JSR ZP32_INC
+    JMP @loop
+@skip_byte:
+    JSR ZP32_INC
+    JSR ZP32_INC
+    JMP @loop
+@end_of_data:
+    LDA #$FF
+    STA LYRIC_END_FLAG
+    RTS
+@call_subsection:
+    JSR ZP32_INC
+    JSR TEXT_FETCH_BYTE
+    STA LYRIC_LENGTH_LO
+    JSR ZP32_INC
+    JSR TEXT_FETCH_BYTE
+    STA LYRIC_LENGTH_HI
+    LDA LYRIC_LENGTH_LO
+    CLC
+    ADC LYRIC_DATA_BASE_LO
+    PHA
+    LDA LYRIC_LENGTH_HI
+    ADC LYRIC_DATA_BASE_HI
+    PHA
+    JSR ZP32_INC
+    JSR TEXT_FETCH_BYTE
+    STA LYRIC_LENGTH_LO
+    JSR ZP32_INC
+    JSR TEXT_FETCH_BYTE
+    STA LYRIC_LENGTH_HI
+    LDA LYRIC_LENGTH_LO
+    CLC
+    ADC LYRIC_DATA_BASE_LO
+    PHA
+    LDA LYRIC_LENGTH_HI
+    ADC LYRIC_DATA_BASE_HI
+    PHA
+    JSR ZP32_INC
+    LDA LYRIC_PTR_LO
+    STA LYRIC_LINE_PTR_LO
+    LDA LYRIC_PTR_HI
+    STA LYRIC_LINE_PTR_HI
+    JSR TEXT_PUSH_B
+    PLA
+    STA LYRIC_LINE_END_HI
+    PLA
+    STA LYRIC_LINE_END_LO
+    PLA
+    STA LYRIC_LINE_PTR_HI
+    STA LYRIC_PTR_HI
+    PLA
+    STA LYRIC_LINE_PTR_LO
+    STA LYRIC_PTR_LO
+    JMP @loop
+@newline:
+    JSR ZP32_INC
+    LDA #$20
+@pad_loop:
+    CPX #$1C
+    BEQ @draw_line
+    STA LYRIC_LINE_BUFFER,X
+    INX
+    JMP @pad_loop
+@draw_line:
+    LDA #$00
+    STA LYRIC_LINE_BUFFER,X
+    LDA #$00
+    STA SYS_ARG_0C
+    LDA LYRIC_ROW_ADDR_LO
+    STA SYS_ARG_09
+    LDA LYRIC_ROW_ADDR_HI
+    STA SYS_ARG_0A
+    LDA #$00
+    STA SYS_SUBFUNCTION
+    LDA #$AE
+    STA PROG_ENTRY_LO
+    LDA #$05
+    STA PROG_ENTRY_HI
+    LDA #$01
+    STA SYS_ARG_0B
+    LDA WINDOW_SAVE_0
+    STA SYS_GROUP
+    LDA #$3C
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    LDA LYRIC_ROW_ADDR_LO
+    CMP LYRIC_ROW0_ADDR_LO
+    BNE @use_row0
+    LDA LYRIC_ROW_ADDR_HI
+    CMP LYRIC_ROW0_ADDR_HI
+    BNE @use_row0
+    LDA LYRIC_ROW1_ADDR_LO
+    STA LYRIC_ROW_ADDR_LO
+    LDA LYRIC_ROW1_ADDR_HI
+    STA LYRIC_ROW_ADDR_HI
+    CLC
+    BCC @row_done
+@use_row0:
+    LDA LYRIC_ROW0_ADDR_LO
+    STA LYRIC_ROW_ADDR_LO
+    LDA LYRIC_ROW0_ADDR_HI
+    STA LYRIC_ROW_ADDR_HI
+@row_done:
+    LDA #$FF
+    STA BAR_LINE_FLAG
+    LDA LYRIC_PTR_LO
+    STA LYRIC_LINE_PTR_LO
+    LDA LYRIC_PTR_HI
+    STA LYRIC_LINE_PTR_HI
+    RTS
+; 作用：从 LYRIC_BACK_PTR 起往前解析歌词数据，得到下一项的类型 LYRIC_ITEM_KIND 与长度 LYRIC_LENGTH；到达段结束位置时先 TEXT_POP_A
+; 调用者：TEXT_BUILD_NEXT_LINE
+TEXT_PARSE_BACK:
+    LDA LYRIC_BACK_PTR_LO
+    STA LYRIC_PTR_LO
+    LDA LYRIC_BACK_PTR_HI
+    STA LYRIC_PTR_HI
+@loop:
+    LDA LYRIC_PTR_LO
+    CMP LYRIC_BACK_END_LO
+    BNE @fetch
+    LDA LYRIC_PTR_HI
+    CMP LYRIC_BACK_END_HI
+    BNE @fetch
+    JSR TEXT_POP_A
+    LDA LYRIC_BACK_PTR_LO
+    STA LYRIC_PTR_LO
+    LDA LYRIC_BACK_PTR_HI
+    STA LYRIC_PTR_HI
+@fetch:
+    JSR TEXT_FETCH_BYTE
+    BNE @check_end
+@store_kind:
+    STA LYRIC_ITEM_KIND
+    JMP @next_byte
+@check_end:
+    CMP #$FF
+    BNE @classify
+    STA LYRIC_ITEM_KIND
+    RTS
+@classify:
+    CMP #$A0
+    BCC @below_a0
+    LDA #$02
+    STA LYRIC_ITEM_KIND
+    JSR ZP32_INC
+@next_byte:
+    JSR ZP32_INC
+@read_duration:
+    LDA #$00
+    STA LYRIC_LENGTH_HI
+    JSR TEXT_FETCH_BYTE
+    STA LYRIC_LENGTH_LO
+@extra_duration:
+    JSR ZP32_INC
+    JSR TEXT_FETCH_BYTE
+    CMP #$80
+    BEQ @add_extra
+    LDA LYRIC_PTR_LO
+    STA LYRIC_BACK_PTR_LO
+    LDA LYRIC_PTR_HI
+    STA LYRIC_BACK_PTR_HI
+    RTS
+@add_extra:
+    JSR ZP32_INC
+    JSR TEXT_FETCH_BYTE
+    CLC
+    ADC LYRIC_LENGTH_LO
+    STA LYRIC_LENGTH_LO
+    LDA LYRIC_LENGTH_HI
+    ADC #$00
+    STA LYRIC_LENGTH_HI
+    JMP @extra_duration
+@below_a0:
+    CMP #$80
+    BCS @control_code
+    CMP #$20
+    BNE @check_caret
+    JSR ZP32_INC
+    JSR TEXT_FETCH_BYTE
+    CMP #$00
+    BNE @space_with_duration
+    JSR BAR_ADDR_INC
+    JSR BAR_ADDR_INC
+    JSR ZP32_INC
+    JMP @loop
+@space_with_duration:
+    LDA #$01
+    STA LYRIC_ITEM_KIND
+    JMP @read_duration
+@check_caret:
+    CMP #$5E
+    BNE @kind_text
+    LDA LYRIC_DEPTH_A
+    BEQ @caret_outside
+    LDA #$00
+    JMP @store_kind
+@caret_outside:
+    LDA #$02
+    JMP @store_caret_kind
+@kind_text:
+    LDA #$01
+@store_caret_kind:
+    STA LYRIC_ITEM_KIND
+    JMP @next_byte
+@control_code:
+    CMP #$9D
+    BNE @check_call
+    LDA LYRIC_POSITION_HI
+    CMP LYRIC_ROW1_ADDR_HI
+    BCC @use_row1
+    BEQ @compare_low
+    JMP @use_row0
+@compare_low:
+    LDA LYRIC_POSITION_LO
+    CMP LYRIC_ROW1_ADDR_LO
+    BCS @use_row0
+@use_row1:
+    LDA LYRIC_ROW1_ADDR_HI
+    STA LYRIC_POSITION_HI
+    LDA LYRIC_ROW1_ADDR_LO
+    STA LYRIC_POSITION_LO
+    JMP @check_end_flag
+@use_row0:
+    LDA LYRIC_ROW0_ADDR_LO
+    STA LYRIC_POSITION_LO
+    LDA LYRIC_ROW0_ADDR_HI
+    STA LYRIC_POSITION_HI
+@check_end_flag:
+    LDA LYRIC_END_FLAG
+    CMP #$FF
+    BEQ @after_newline
+    LDA #$C0
+    STA BAR_CMD_OP
+    JSR BAR_QUEUE_COMMAND
+@after_newline:
+    JSR ZP32_INC
+    JMP @loop
+@check_call:
+    CMP #$8E
+    BNE @skip_unknown
+    JSR ZP32_INC
+    JSR TEXT_FETCH_BYTE
+    STA LYRIC_LENGTH_LO
+    JSR ZP32_INC
+    JSR TEXT_FETCH_BYTE
+    STA LYRIC_LENGTH_HI
+    LDA LYRIC_LENGTH_LO
+    CLC
+    ADC LYRIC_DATA_BASE_LO
+    PHA
+    LDA LYRIC_LENGTH_HI
+    ADC LYRIC_DATA_BASE_HI
+    PHA
+    JSR ZP32_INC
+    JSR TEXT_FETCH_BYTE
+    STA LYRIC_LENGTH_LO
+    JSR ZP32_INC
+    JSR TEXT_FETCH_BYTE
+    STA LYRIC_LENGTH_HI
+    LDA LYRIC_LENGTH_LO
+    CLC
+    ADC LYRIC_DATA_BASE_LO
+    PHA
+    LDA LYRIC_LENGTH_HI
+    ADC LYRIC_DATA_BASE_HI
+    PHA
+    JSR ZP32_INC
+    LDA LYRIC_PTR_LO
+    STA LYRIC_BACK_PTR_LO
+    LDA LYRIC_PTR_HI
+    STA LYRIC_BACK_PTR_HI
+    JSR TEXT_PUSH_A
+    PLA
+    STA LYRIC_BACK_END_HI
+    PLA
+    STA LYRIC_BACK_END_LO
+    PLA
+    STA LYRIC_BACK_PTR_HI
+    STA LYRIC_PTR_HI
+    PLA
+    STA LYRIC_BACK_PTR_LO
+    STA LYRIC_PTR_LO
+    JMP @loop
+@skip_unknown:
+    JSR ZP32_INC
+    JMP @loop
+; 作用：按 LYRIC_PTR_LO/LYRIC_PTR_HI 与页组 LYRIC_BYTE 取一个字节到 A：先 $2C 换远地址，再 VEC_FAR_READ_BYTE 读，同时存 LYRIC_FETCHED_BYTE；调用 16 次
+; 调用者：TEXT_PARSE_LINE、TEXT_PARSE_BACK
+TEXT_FETCH_BYTE:
+    LDY #$00
+    LDA LYRIC_PTR_LO
+    STA PROG_ENTRY_LO
+    LDA LYRIC_PTR_HI
+    STA PROG_ENTRY_HI
+    LDA LYRIC_BYTE
+    STA SYS_GROUP
+    JSR TEXT_READ_FAR
+    RTS
+; 作用：经 $2C 把 SYS_GROUP 与 PROG_ENTRY 换成远地址，读一个字节存 LYRIC_FETCHED_BYTE
+; 调用者：TEXT_FETCH_BYTE
+TEXT_READ_FAR:
+    LDA #$2C
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    JSR VEC_FAR_READ_BYTE
+    STA LYRIC_FETCHED_BYTE
+    RTS
+; 作用：LYRIC_POSITION 加 1
+; 调用者：BAR_SPLIT_LENGTH、TEXT_PARSE_BACK
+BAR_ADDR_INC:
+    INC LYRIC_POSITION_LO
+    BNE @return
+    INC LYRIC_POSITION_HI
+@return:
+    RTS
+    RTS
+; 作用：设置条带绘制参数：$064C/$064D 存入 LYRIC_ROW0_ADDR，加 $38 存入 LYRIC_ROW1_ADDR，长度 $064F=$38，$0652=4，按 BAR_ERASE_MODE 选行宽与图块（功能 $42 或 $41）；只有 API_66 调用它
+; 调用者：API_66
+TEXT_SETUP_DRAW:
+    LDA #$00
+    STA LYRIC_BAR_ADDR_LO
+    STA LYRIC_BAR_ADDR_HI
+    STA BAR_CMD_OP
+    STA BAR_CMD_COUNT
+    STA BAR_CMD_ADDR_LO
+    STA BAR_CMD_ADDR_HI
+    LDA SYS_ARG_09
+    STA LYRIC_ROW0_ADDR_LO
+    LDA SYS_ARG_0A
+    STA LYRIC_ROW0_ADDR_HI
+    LDA SYS_ARG_09
+    CLC
+    ADC #$38
+    STA LYRIC_ROW1_ADDR_LO
+    LDA SYS_ARG_0A
+    ADC #$00
+    STA LYRIC_ROW1_ADDR_HI
+    LDA #$00
+    STA SYS_ARG_0D
+    STA SYS_ARG_0E
+    LDA #$38
+    STA SYS_ARG_0C
+    LDA #$04
+    STA SYS_ARG_0F
+    LDA BAR_ERASE_MODE
+    BEQ @mode_41
+    LDA #$1C
+    STA SYS_ARG_07
+    LDA #$00
+    STA SYS_ARG_08
+    LDA #$42
+    CLC
+    BCC @call
+@mode_41:
+    LDA #$00
+    STA SYS_ARG_07
+    LDA #$1C
+    STA SYS_ARG_08
+    LDA #$41
+@call:
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    RTS
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+    .byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00

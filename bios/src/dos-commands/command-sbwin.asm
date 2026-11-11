@@ -1,0 +1,201 @@
+; 作用：命令 SB-WIN：运行 SB-WIN.EXE（文件名在 STR_SBWIN_EXE）：SBWIN_FLAG 已置位（正在运行）时显示消息 $82 后返回；否则以方式 0 打开文件，打不开就提示放入磁盘并等键（Ctrl+C 放弃）后重试；取文件大小，按每页 4096 字节算出页数 SBWIN_PAGE_COUNT 并分配（$7E/$00），整个读入这些页（$7C/$0F），关闭文件；读入内容第 3、4 字节必须是 $AA、$55，是则把起始页与页数写进内容的第 5、6 字节，置 SBWIN_FLAG，经功能 $25 在起始页的 $8100 处运行，返回后清标志并调用 CMD_CLS；不是则显示消息 $3E；最后释放页（$7E/$01），让软驱停转（$80/$07）。保存和恢复 A、X、Y。
+; 调用者：DOS_CMD_TABLE（地址表）
+CMD_SBWIN:
+    PHA
+    TXA
+    PHA
+    TYA
+    PHA
+    LDA #$01
+    STA CURSOR_COL
+    LDA SBWIN_FLAG
+    BEQ @load
+    LDA #$82
+    STA LIB_GROUP
+    JSR SHELL_PRINT_MESSAGE
+    JSR LIB_NEWLINE
+    JMP @finish
+@load:
+    LDY #$00
+@loop:
+    LDA STR_SBWIN_EXE,Y
+    STA PATH_BUFFER,Y
+    BEQ @open_file
+    INY
+    JMP @loop
+@open_file:
+    LDA #$7B
+    STA SYS_FUNCTION
+    LDA #$09
+    STA SYS_SUBFUNCTION
+    LDA #$00
+    STA FILE_MODE
+    JSR VEC_SYSCALL
+    LDA DOS_ERROR
+    BEQ @opened
+    LDA #$01
+    STA CURSOR_COL
+    LDA #$30
+    STA LIB_GROUP
+    JSR SHELL_PRINT_MESSAGE
+    JSR LIB_NEWLINE
+    LDA #$01
+    STA CURSOR_COL
+    LDA #$3C
+    STA LIB_GROUP
+    JSR SHELL_PRINT_MESSAGE
+    JSR LIB_NEWLINE
+    LDA #$80
+    STA SYS_FUNCTION
+    LDA #$07
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$6B
+    STA SYS_FUNCTION
+    LDA #$05
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    JSR LIB_GET_KEY
+    LDA KEY_ASCII
+    CMP #$03
+    BNE @open_file
+    JMP @finish
+@opened:
+    LDA #$7C
+    STA SYS_FUNCTION
+    LDA #$0D
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$00
+    STA SHELL_RUN_STATE
+    LDA FILE_SIZE_0
+    BEQ @check_size_1
+    LDA #$01
+    STA SHELL_RUN_STATE
+@check_size_1:
+    LDA FILE_SIZE_1
+    AND #$0F
+    BEQ @compute_pages
+    LDA #$01
+    STA SHELL_RUN_STATE
+@compute_pages:
+    LSR FILE_SIZE_2
+    ROR FILE_SIZE_1
+    LSR FILE_SIZE_2
+    ROR FILE_SIZE_1
+    LSR FILE_SIZE_2
+    ROR FILE_SIZE_1
+    LSR FILE_SIZE_2
+    ROR FILE_SIZE_1
+    LDA FILE_SIZE_1
+    CLC
+    ADC SHELL_RUN_STATE
+    STA SBWIN_PAGE_COUNT
+    STA ALLOC_COUNT
+    LDA #$7E
+    STA SYS_FUNCTION
+    LDA #$00
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA DOS_ERROR
+    BEQ @allocated
+    LDA #$44
+    STA LIB_GROUP
+    JSR SHELL_PRINT_MESSAGE
+    JSR LIB_NEWLINE
+    JMP @finish
+@allocated:
+    LDA ALLOC_START
+    STA SBWIN_START_PAGE
+    LDA #$7C
+    STA SYS_FUNCTION
+    LDA #$0F
+    STA SYS_SUBFUNCTION
+    LDA SBWIN_START_PAGE
+    STA FILE_START_PAGE
+    JSR VEC_SYSCALL
+    LDA DOS_ERROR
+    BEQ @loaded
+    LDA #$45
+    STA LIB_GROUP
+    JSR SHELL_PRINT_MESSAGE
+    JSR LIB_NEWLINE
+    JMP @free_pages
+@loaded:
+    LDA #$7B
+    STA SYS_FUNCTION
+    LDA #$0A
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$80
+    STA SYS_FUNCTION
+    LDA #$07
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    LDA #$29
+    STA SYS_FUNCTION
+    LDA SBWIN_START_PAGE
+    STA SYS_PAGE
+    LDA #$03
+    STA SYS_ARG_10
+    JSR VEC_SYSCALL
+    LDA $B003
+    CMP #$AA
+    BNE @bad_signature
+    LDA $B004
+    CMP #$55
+    BNE @bad_signature
+    LDA SBWIN_START_PAGE
+    STA $B005
+    LDA SBWIN_PAGE_COUNT
+    STA $B006
+    LDA #$01
+    STA SBWIN_FLAG
+    LDA #$25
+    STA SYS_FUNCTION
+    LDA SBWIN_START_PAGE
+    STA SYS_GROUP
+    LDA #$00
+    STA PROG_ENTRY_LO
+    LDA #$81
+    STA PROG_ENTRY_HI
+    JSR VEC_SYSCALL
+    LDA #$00
+    STA SBWIN_FLAG
+    LDA #$00
+    STA CMD_TAIL
+    JSR CMD_CLS
+    JMP @free_pages
+@bad_signature:
+    LDA #$01
+    STA CURSOR_COL
+    LDA #$3E
+    STA LIB_GROUP
+    JSR LIB_PRINT_MESSAGE
+    JSR LIB_NEWLINE
+@free_pages:
+    LDA #$7E
+    STA SYS_FUNCTION
+    LDA #$01
+    STA SYS_SUBFUNCTION
+    LDA SBWIN_START_PAGE
+    STA ALLOC_START
+    LDA SBWIN_PAGE_COUNT
+    STA ALLOC_COUNT
+    JSR VEC_SYSCALL
+@finish:
+    LDA #$80
+    STA SYS_FUNCTION
+    LDA #$07
+    STA SYS_SUBFUNCTION
+    JSR VEC_SYSCALL
+    PLA
+    TAY
+    PLA
+    TAX
+    PLA
+    RTS
+; 作用：字符串 "SB-WIN.EXE"
+; 引用者：CMD_SBWIN
+STR_SBWIN_EXE:
+    .byte $53,$42,$2D,$57,$49,$4E,$2E,$45,$58,$45,$00

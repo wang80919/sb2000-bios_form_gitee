@@ -1,0 +1,208 @@
+{
+  "ines": "4e45531a2000b0a00002000000000000",
+  "includes": [
+    "src/include/zero-page.inc",
+    "src/include/system-ram.inc",
+    "src/include/hardware-registers.inc",
+    "src/include/extended-ram.inc"
+  ],
+  "parts": [
+    {
+      "firstPage": 0,
+      "pageCount": 3,
+      "base": 32768,
+      "sources": [
+        "src/dos-shell/startup-and-library.asm",
+        "src/dos-shell/shell-helpers.asm",
+        "src/dos-shell/command-dispatch.asm",
+        "src/dos-shell/shell-startup.asm",
+        "src/dos-shell/directory-output-helpers.asm",
+        "src/dos-commands/command-cd.asm",
+        "src/dos-commands/command-dir.asm",
+        "src/dos-commands/command-md-rd.asm",
+        "src/dos-commands/command-sbwin.asm",
+        "src/dos-commands/command-stubs.asm",
+        "src/dos-shell/session-start.asm"
+      ]
+    },
+    {
+      "firstPage": 3,
+      "pageCount": 1,
+      "binary": "assets/p03-p03.bin"
+    },
+    {
+      "firstPage": 4,
+      "pageCount": 4,
+      "base": 49152,
+      "sources": [
+        "src/kernel/reset-and-boot.asm",
+        "src/kernel/interrupt-handlers.asm",
+        "src/kernel/random-and-gamepad.asm",
+        "src/kernel/nmi-bar-animation.asm",
+        "src/kernel/sound-engine.asm",
+        "src/kernel/speech-port-feed.asm",
+        "src/kernel/mouse-driver.asm",
+        "src/kernel/keyboard-driver.asm",
+        "src/kernel/timer-and-hooks.asm",
+        "src/kernel/floppy-interrupt.asm",
+        "src/kernel/syscall-table.asm",
+        "src/kernel/basic-services.asm",
+        "src/kernel/input-services.asm",
+        "src/kernel/far-memory.asm",
+        "src/kernel/vram-dma.asm",
+        "src/kernel/sound-services.asm",
+        "src/kernel/system-state.asm",
+        "src/kernel/speech-port-services.asm",
+        "src/kernel/syscall-dispatch.asm",
+        "src/kernel/entry-vectors.asm"
+      ]
+    },
+    {
+      "firstPage": 8,
+      "pageCount": 1,
+      "base": 32768,
+      "sources": [
+        "src/display/text-output.asm",
+        "src/display/cell-fill.asm"
+      ]
+    },
+    {
+      "firstPage": 9,
+      "pageCount": 1,
+      "base": 32768,
+      "sources": [
+        "src/display/cell-display.asm",
+        "src/math/math-library.asm"
+      ]
+    },
+    {
+      "firstPage": 10,
+      "pageCount": 1,
+      "base": 32768,
+      "sources": [
+        "src/math/integer-multiply-divide.asm",
+        "src/window/window-manager.asm"
+      ]
+    },
+    {
+      "firstPage": 11,
+      "pageCount": 1,
+      "base": 32768,
+      "sources": [
+        "src/image/tile-unpack.asm",
+        "src/image/map-and-effects.asm"
+      ]
+    },
+    {
+      "firstPage": 12,
+      "pageCount": 2,
+      "base": 32768,
+      "sources": [
+        "src/input-method/ime-services.asm",
+        "src/input-method/ime-dictionary-lookup.asm"
+      ]
+    },
+    {
+      "firstPage": 14,
+      "pageCount": 1,
+      "base": 40960,
+      "sources": [
+        "src/input-method/ime-extra-services.asm",
+        "src/printer/printer-service.asm"
+      ]
+    },
+    {
+      "firstPage": 15,
+      "pageCount": 1,
+      "base": 32768,
+      "sources": [
+        "src/display/text-to-buffer.asm",
+        "src/karaoke/lyrics-scroll.asm"
+      ]
+    },
+    {
+      "firstPage": 16,
+      "pageCount": 72,
+      "binary": "assets/p10-p57.bin"
+    },
+    {
+      "firstPage": 88,
+      "pageCount": 3,
+      "base": 32768,
+      "sources": [
+        "src/file-system/fs-open-and-io.asm",
+        "src/file-system/fs-directory.asm",
+        "src/file-system/fs-fat.asm",
+        "src/file-system/fs-file-operations.asm",
+        "src/file-system/fs-dispatch.asm"
+      ]
+    },
+    {
+      "firstPage": 91,
+      "pageCount": 1,
+      "base": 32768,
+      "sources": [
+        "src/messages/dos-messages-en.asm"
+      ]
+    },
+    {
+      "firstPage": 92,
+      "pageCount": 2,
+      "base": 32768,
+      "sources": [
+        "src/system-services/time-and-program-exec.asm",
+        "src/system-services/page-allocation.asm",
+        "src/disk/floppy-controller.asm",
+        "src/disk/disk-services.asm",
+        "src/system-services/group-5c-dispatch.asm"
+      ]
+    },
+    {
+      "firstPage": 94,
+      "pageCount": 1,
+      "base": 32768,
+      "sources": [
+        "src/dos-commands/command-group-5e.asm"
+      ]
+    },
+    {
+      "firstPage": 95,
+      "pageCount": 1,
+      "base": 32768,
+      "sources": [
+        "src/messages/dos-messages-cn.asm"
+      ]
+    },
+    {
+      "firstPage": 96,
+      "pageCount": 3,
+      "base": 32768,
+      "sources": [
+        "src/dos-commands/command-group-60-dir.asm",
+        "src/dos-commands/command-type.asm",
+        "src/dos-commands/command-rename.asm",
+        "src/dos-commands/command-delete.asm",
+        "src/dos-commands/command-copy.asm",
+        "src/dos-commands/command-cls-exit.asm"
+      ]
+    },
+    {
+      "firstPage": 99,
+      "pageCount": 21,
+      "binary": "assets/p63-p77.bin"
+    },
+    {
+      "firstPage": 120,
+      "pageCount": 1,
+      "base": 32768,
+      "sources": [
+        "src/boot/boot-program.asm"
+      ]
+    },
+    {
+      "firstPage": 121,
+      "pageCount": 7,
+      "binary": "assets/p79-p7F.bin"
+    }
+  ]
+}

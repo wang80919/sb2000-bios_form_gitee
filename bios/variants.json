@@ -1,0 +1,8 @@
+{
+  "fastboot": {
+    "description": "快速开机：复位后直接进入 DOS，跳过开机画面与欢迎语音，只用于调试，不用于验证结论",
+    "patches": [
+      { "offset": "0x4024", "expect": "78", "value": "00", "note": "RESET 里调用功能 $26 前写入 SYS_GROUP 的立即数，$78（开机程序）改为 $00（DOS）" }
+    ]
+  }
+}

@@ -1,0 +1,106 @@
+[
+  {
+    "from": "7866C",
+    "to": "7866C",
+    "at": "p78.asm $866C",
+    "kind": "压缩图片",
+    "format": "BOOT_IMAGE_TABLE 项 0 的压缩图片（源地址 $866C），解压格式见 tools/decode-img.mjs；从页 78 的 $866C 起，延续到页 79 起的资源",
+    "description": "开机画面的第 1 张图（IMAGE_POINTERS[0]）"
+  },
+  {
+    "from": "0D000",
+    "to": "0D000",
+    "at": "p0C.asm $9000",
+    "kind": "表",
+    "format": "$9000-$926C 是拼音音节表的后半（每条 6 字节，小写拼音用空格补齐），$926D 起是两字母组合表（两个字母一组，含义未确认），见手册 5.10 节",
+    "description": "输入法数据表（页 0D 开头）"
+  },
+  {
+    "from": "05F6F",
+    "to": "05F6F",
+    "at": "p04.asm $DF6F",
+    "kind": "地址表",
+    "format": "5 项小端 16 位地址 $DF7A、$E042、$E03E、$E02B、$DF79，其后 1 字节 $60（RTS，即 $DF79 本身）；表项指向未被执行过的入口",
+    "description": "内核里一张没有被引用到的处理例程地址表"
+  },
+  {
+    "from": "07FF9",
+    "to": "07FF9",
+    "at": "p04.asm $FFF9",
+    "kind": "中断向量",
+    "format": "$FFF9 为 $00 填充；$FFFA/$FFFB NMI = $C084，$FFFC/$FFFD RESET = $C000，$FFFE/$FFFF IRQ 与 BRK = $C12B",
+    "description": "6502 中断向量"
+  },
+  {
+    "from": "07F19",
+    "to": "07F19",
+    "at": "p04.asm $FF19",
+    "kind": "填充",
+    "format": "2 字节 $00",
+    "description": "内核末尾向量之前的填充"
+  },
+  {
+    "from": "05000",
+    "to": "05000",
+    "at": "p04.asm $D000",
+    "kind": "数据",
+    "format": "音色与包络数据区的后半部分，与上一页末尾的数据连续（跨页，页边界落在 $CFFF/$D000 之间），SOUND_CMD_CD 从指向处每 4 字节取一项（包络指针 2 字节、寄存器 0 的值、寄存器 1 的值）",
+    "description": "跨页数据的后半"
+  },
+  {
+    "from": "00003",
+    "to": "00003",
+    "at": "p00.asm $8003",
+    "kind": "数据",
+    "format": "页 0 的程序头标记：与可执行程序文件头同格式，偏移 3、4 是魔数 $AA $55（EXEC_PROGRAM 检查），其后 2 字节是自由字节",
+    "description": "页首标记"
+  },
+  {
+    "from": "5F000",
+    "to": "5F000",
+    "at": "p5F.asm $8000",
+    "kind": "数据",
+    "format": "出错码 0 的信息“无错”的前 3 字节（GB2312 $CEDE $B4ED，$ED 与结尾 $00 在下一行）",
+    "description": "页 5F 页首"
+  },
+  {
+    "from": "785D7",
+    "to": "785D7",
+    "at": "p78.asm $85D7",
+    "kind": "数据",
+    "format": "字符串“ ”（一个空格加结尾 0），BOOT_BLANK_CELL 用功能 $3F 显示它",
+    "description": "开机程序中的数据"
+  },
+  {
+    "from": "09FFE",
+    "to": "09FFE",
+    "at": "p09.asm $8FFE",
+    "kind": "跨页指令",
+    "format": "JSR $9019 的操作码与低字节（$20 $19），高字节 $90 在下一页（p0A.asm）的第一个字节；两页按页组 $09 连续映射时是一条完整指令",
+    "description": "整数乘法入口里的跨页调用"
+  },
+  {
+    "from": "0A000",
+    "to": "0A000",
+    "at": "p0A.asm $8000",
+    "kind": "跨页指令",
+    "format": "上一页末尾 JSR $9019 的操作数高字节 $90",
+    "description": "跨页指令的后半"
+  },
+  {
+    "from": "0DFFF",
+    "to": "0DFFF",
+    "at": "p0C.asm $9FFF",
+    "kind": "跨页指令",
+    "format": "BNE 的操作码 $D0，操作数 $03 在下一页（p0E.asm）的第一个字节",
+    "description": "跨页分支的前半"
+  },
+  {
+    "from": "0E000",
+    "to": "0E000",
+    "at": "p0E.asm $A000",
+    "kind": "跨页指令",
+    "format": "上一页末尾 BNE 的操作数 $03，跳到 IME_SUB_16_CONT",
+    "description": "跨页分支的后半"
+  }
+]

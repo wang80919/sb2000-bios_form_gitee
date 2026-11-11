@@ -1,0 +1,992 @@
+; 作用：系统功能 $10：按子功能 0-7 修改显示相关的影子寄存器（PPU_CTRL_SHADOW、PPU_MASK_SHADOW、PPU_EXT_CTRL_SHADOW、NMI_FLAGS）并写入硬件，用紧跟 JSR 的内联跳转表分流到 VIDEO_OPT_0 至 VIDEO_OPT_7；子功能超过 7 时 SYS_STATUS=$FF。
+; 输入：SYS_SUBFUNCTION=0-7，SYS_ARG_0F=要并入的位。
+; 调用者：SYSCALL_TABLE（地址表）、API_18
+API_10_VIDEO_OPTION:
+    LDA SYS_SUBFUNCTION
+    CMP #$08
+    BCC @dispatch
+    LDA #$FF
+    STA SYS_STATUS
+    RTS
+@dispatch:
+    JSR INLINE_JUMP_TABLE
+    .word VIDEO_OPT_0,VIDEO_OPT_1,VIDEO_OPT_2,VIDEO_OPT_3,VIDEO_OPT_4,VIDEO_OPT_5,VIDEO_OPT_6,VIDEO_OPT_7
+; 作用：功能 $10 子功能 0：PPU_EXT_CTRL_SHADOW 清位 7 后并入 SYS_ARG_0F，写 PPU_EXT_CTRL_SHADOW 与 PPU_EXT_CTRL。
+; 调用者：API_10_VIDEO_OPTION（地址表）
+VIDEO_OPT_0:
+    LDA PPU_EXT_CTRL_SHADOW
+    AND #$7F
+    JMP VIDEO_OPT_STORE_2008
+; 作用：功能 $10 子功能 1：PPU_EXT_CTRL_SHADOW 清位 0 后并入 SYS_ARG_0F，写 PPU_EXT_CTRL_SHADOW 与 PPU_EXT_CTRL。
+; 调用者：API_10_VIDEO_OPTION（地址表）
+VIDEO_OPT_1:
+    LDA PPU_EXT_CTRL_SHADOW
+    AND #$FE
+    JMP VIDEO_OPT_STORE_2008
+; 作用：功能 $10 子功能 2：PPU_EXT_CTRL_SHADOW 清位 2、3 后并入 SYS_ARG_0F，写 PPU_EXT_CTRL_SHADOW 与 PPU_EXT_CTRL（落入 VIDEO_OPT_STORE_2008）。
+; 调用者：API_10_VIDEO_OPTION（地址表）
+VIDEO_OPT_2:
+    LDA PPU_EXT_CTRL_SHADOW
+    AND #$F3
+; 作用：功能 $10 子功能 0-2 共用的尾部：A 并入 SYS_ARG_0F，写 PPU_EXT_CTRL_SHADOW 与 PPU_EXT_CTRL。
+; 输入：A=已清好相应位的 PPU_EXT_CTRL_SHADOW。
+; 调用者：VIDEO_OPT_0、VIDEO_OPT_1、VIDEO_OPT_2（顺序执行到这里）
+VIDEO_OPT_STORE_2008:
+    ORA SYS_ARG_0F
+    STA PPU_EXT_CTRL_SHADOW
+    STA PPU_EXT_CTRL
+    RTS
+; 作用：功能 $10 子功能 3：PPU_CTRL_SHADOW 清低 2 位（名称表选择）后并入 SYS_ARG_0F，写 PPU_CTRL_SHADOW 与 PPU_CTRL。
+; 调用者：API_10_VIDEO_OPTION（地址表）
+VIDEO_OPT_3:
+    LDA PPU_CTRL_SHADOW
+    AND #$FC
+    JMP VIDEO_OPT_STORE_PPU_CTRL
+; 作用：功能 $10 子功能 4：SYS_ARG_0F 非 0 时打开 NMI 精灵 DMA（NMI_FLAGS 位 2），为 0 时关闭；再把 PPU_MASK_SHADOW 清位 4（精灵显示）后并入 SYS_ARG_0F，写 PPU_MASK_SHADOW 与 PPU_MASK。
+; 调用者：API_10_VIDEO_OPTION（地址表）
+VIDEO_OPT_4:
+    LDA SYS_ARG_0F
+    BEQ @disable_dma
+    LDA NMI_FLAGS
+    ORA #$04
+    JMP @store_flags
+@disable_dma:
+    LDA NMI_FLAGS
+    AND #$FB
+@store_flags:
+    STA NMI_FLAGS
+    LDA PPU_MASK_SHADOW
+    AND #$EF
+    JMP VIDEO_OPT_STORE_PPU_MASK
+; 作用：功能 $10 子功能 5：PPU_CTRL_SHADOW 位 5（8×16 精灵）取 SYS_ARG_0F，写 PPU_CTRL_SHADOW 与 PPU_CTRL（落入 VIDEO_OPT_STORE_PPU_CTRL）。
+; 调用者：API_10_VIDEO_OPTION（地址表）
+VIDEO_OPT_5:
+    LDA PPU_CTRL_SHADOW
+    AND #$DF
+; 作用：功能 $10 子功能 3、5 共用的尾部：A 并入 SYS_ARG_0F，写 PPU_CTRL_SHADOW 与 PPU_CTRL。
+; 输入：A=已清好相应位的 PPU_CTRL_SHADOW。
+; 调用者：VIDEO_OPT_3、VIDEO_OPT_5（顺序执行到这里）
+VIDEO_OPT_STORE_PPU_CTRL:
+    ORA SYS_ARG_0F
+    STA PPU_CTRL_SHADOW
+    STA PPU_CTRL
+    RTS
+; 作用：功能 $10 子功能 6：PPU_MASK_SHADOW 只保留位 1-4，再并入 SYS_ARG_0F（落入 VIDEO_OPT_STORE_PPU_MASK）。
+; 调用者：API_10_VIDEO_OPTION（地址表）
+VIDEO_OPT_6:
+    LDA PPU_MASK_SHADOW
+    AND #$1E
+; 作用：功能 $10 子功能 4、6、7 共用的尾部：A 并入 SYS_ARG_0F，写 PPU_MASK_SHADOW 与 PPU_MASK。
+; 输入：A=已清好相应位的 PPU_MASK_SHADOW。
+; 调用者：VIDEO_OPT_4、VIDEO_OPT_7、VIDEO_OPT_6（顺序执行到这里）
+VIDEO_OPT_STORE_PPU_MASK:
+    ORA SYS_ARG_0F
+    STA PPU_MASK_SHADOW
+    STA PPU_MASK
+    RTS
+; 作用：功能 $10 子功能 7：PPU_MASK_SHADOW 清位 3（背景显示）后并入 SYS_ARG_0F，写 PPU_MASK_SHADOW 与 PPU_MASK。
+; 调用者：API_10_VIDEO_OPTION（地址表）
+VIDEO_OPT_7:
+    LDA PPU_MASK_SHADOW
+    AND #$F7
+    JMP VIDEO_OPT_STORE_PPU_MASK
+; 作用：系统功能 $11：子功能小于 $80 时，把 GLYPH_MODE 的高 2 位换成 DISPLAY_MODE_BITS 里对应的值；否则（低 2 位为 0-2）把字库区域登记到 FONT_TABLE 的第 低 2 位 项（每项 3 字节：SYS_ARG_01、GLYPH_ADDR_LO、换算后的 GLYPH_ADDR_HI），低 2 位为 3 什么都不做。
+; 输入：SYS_SUBFUNCTION，SYS_ARG_01，GLYPH_ADDR_LO/HI。
+; 调用者：SYSCALL_TABLE（地址表）
+API_11_DISPLAY_MODE:
+    LDX SYS_SUBFUNCTION
+    CPX #$80
+    BCS @register_font
+    LDA GLYPH_MODE
+    AND #$3F
+    ORA DISPLAY_MODE_BITS,X
+    STA GLYPH_MODE
+    JMP @return
+@register_font:
+    LDA SYS_SUBFUNCTION
+    AND #$03
+    CMP #$03
+    BCS @return
+    LDA #$00
+    STA VRAM_TEMP
+    LSR SYS_ARG_01
+    ROR VRAM_TEMP
+    LSR SYS_ARG_01
+    ROR VRAM_TEMP
+    LSR VRAM_TEMP
+    LSR VRAM_TEMP
+    LDA GLYPH_ADDR_HI
+    ADC #$80
+    ADC VRAM_TEMP
+    STA GLYPH_ADDR_HI
+    LDA SYS_SUBFUNCTION
+    AND #$03
+    STA VRAM_TEMP
+    ASL A
+    ADC VRAM_TEMP
+    TAY
+    LDA SYS_ARG_01
+    STA FONT_TABLE,Y
+    LDA GLYPH_ADDR_LO
+    STA FONT_TABLE+1,Y
+    LDA GLYPH_ADDR_HI
+    STA FONT_TABLE+2,Y
+@return:
+    RTS
+; 作用：功能 $11 子功能 0-3 并入 GLYPH_MODE 高 2 位的值：$00、$40、$80、$C0。
+; 引用者：API_11_DISPLAY_MODE
+DISPLAY_MODE_BITS:
+    .byte $00,$40
+    .byte $80
+    .byte $C0
+; 作用：系统功能 $12：开关 NMI 及 NMI 里的各项服务。子功能 $88 把 NMI 钩子复位为 HOOK_NOP（SYS_ARG_0F 为 0 复位 NMI_HOOK5，否则复位 NMI_HOOK4）；子功能低 4 位不小于 7 时 SYS_STATUS=$FF；子功能 0 清 PPU_CTRL_SHADOW 位 7（关 NMI）；$80 置位位 7（开 NMI）；1-6 按 FLAG_CLEAR_MASK_INDEX1 清 NMI_FLAGS 里的一位，$81-$86 按 FLAG_SET_MASK_INDEX1 置位一位；$85 还把 MOUSE_ABSENT 置 $FF。
+; 输入：SYS_SUBFUNCTION，SYS_ARG_0F（子功能 $88 用）。
+; 调用者：SYSCALL_TABLE（地址表）、API_31、SOUND_SUB_02、SOUND_UPDATE_ON、SOUND_UPDATE_OFF
+API_12_PPU_CONTROL:
+    LDA SYS_SUBFUNCTION
+    CMP #$88
+    BNE @check_range
+    LDA SYS_ARG_0F
+    BNE @reset_hook4
+    LDA #<HOOK_NOP
+    STA NMI_HOOK5_VEC_LO
+    LDA #>HOOK_NOP
+    STA NMI_HOOK5_VEC_HI
+    RTS
+@reset_hook4:
+    LDA #<HOOK_NOP
+    STA NMI_HOOK4_VEC_LO
+    LDA #>HOOK_NOP
+    STA NMI_HOOK4_VEC_HI
+    RTS
+@check_range:
+    AND #$0F
+    CMP #$07
+    BCC @dispatch
+    LDA #$FF
+    STA SYS_STATUS
+    RTS
+@dispatch:
+    LDA SYS_SUBFUNCTION
+    BMI @enable
+    BNE @clear_flag
+    LDA PPU_CTRL_SHADOW
+    AND #$7F
+    ORA SYS_SUBFUNCTION
+    STA PPU_CTRL_SHADOW
+    STA PPU_CTRL
+    RTS
+@enable:
+    CMP #$80
+    BNE @set_flag
+    LDA PPU_CTRL_SHADOW
+    ORA SYS_SUBFUNCTION
+    STA PPU_CTRL_SHADOW
+    STA PPU_CTRL
+    JMP @after_enable
+@set_flag:
+    AND #$0F
+    TAY
+    LDA NMI_FLAGS
+    ORA FLAG_SET_MASK_INDEX1,Y
+    STA NMI_FLAGS
+@after_enable:
+    LDA SYS_SUBFUNCTION
+    CMP #$85
+    BNE @return
+    LDA #$FF
+    STA MOUSE_ABSENT
+@return:
+    RTS
+@clear_flag:
+    TAY
+    LDA NMI_FLAGS
+    AND FLAG_CLEAR_MASK_INDEX1,Y
+    STA NMI_FLAGS
+; 作用：功能 $12 用 Y=1-6 取清除掩码时的基址，本字节是上一个例程的 RTS；真正的表从下一字节 FLAG_CLEAR_MASKS 起
+; 调用者：API_12_PPU_CONTROL
+FLAG_CLEAR_MASK_INDEX1:
+    RTS
+; 作用：清除单个标志位的掩码：$7F、$BF、$DF、$EF、$F7、$FD（最后一项在下一个标号处）；功能 $13 用 Y=0-5 直接取，功能 $12 经 FLAG_CLEAR_MASK_INDEX1 用 Y=1-6 取
+; 引用者：API_13_IRQ_MASK
+FLAG_CLEAR_MASKS:
+    .byte $7F,$BF,$DF,$EF,$F7
+; 作用：功能 $12 用 Y=1-6 取置位掩码时的基址，本字节 $FD 是上表第 6 项；置位掩码从下一字节起：$80、$40、$20、$10、$08、$02
+; 引用者：API_12_PPU_CONTROL
+FLAG_SET_MASK_INDEX1:
+    .byte $FD
+    .byte $80
+    .byte $40
+    .byte $20
+    .byte $10
+    .byte $08
+    .byte $02
+; 作用：系统功能 $13：置位或清位中断屏蔽影子 IRQ_MASK_SHADOW 并写 IRQ_MASK。子功能 0-6 按 IRQ_ENABLE_BITS 置位一位，$80-$86 按 FLAG_CLEAR_MASKS 清一位；写入后：$80 设置定时器（TIMER_CTRL=$EF，TIMER_COUNT=$3C）；子功能 2 与 $82 写 KBD_ACK 为 $40 与 $80；$81 按 MOUSE_PACKET_STATE 设置 MOUSE_ABSENT。子功能 $88 把 SYS_ARG_0F 指定的钩子复位为 HOOK_NOP（0 定时器、1 IRQ3、2 IRQ1、3 IRQ4、4 鼠标、5 键盘）；子功能低 4 位不小于 7 时 SYS_STATUS=$FF。
+; 输入：SYS_SUBFUNCTION，SYS_ARG_0F（子功能 $88 用）。
+; 调用者：SYSCALL_TABLE（地址表）
+API_13_IRQ_MASK:
+    LDA SYS_SUBFUNCTION
+    CMP #$88
+    BEQ @reset_hook
+    AND #$0F
+    CMP #$07
+    BCC @dispatch
+    LDA #$FF
+    STA SYS_STATUS
+    RTS
+@dispatch:
+    LDA SYS_SUBFUNCTION
+    BMI @clear_bit
+    TAY
+    LDA IRQ_MASK_SHADOW
+    ORA IRQ_ENABLE_BITS,Y
+    JMP @write_mask
+@clear_bit:
+    AND #$0F
+    TAY
+    LDA IRQ_MASK_SHADOW
+    AND FLAG_CLEAR_MASKS,Y
+@write_mask:
+    STA IRQ_MASK_SHADOW
+    STA IRQ_MASK
+    LDA SYS_SUBFUNCTION
+    CMP #$80
+    BEQ @set_timer
+    CMP #$02
+    BEQ @kbd_ack_40
+    CMP #$82
+    BEQ @kbd_ack_80
+    CMP #$81
+    BNE @return
+    LDA MOUSE_PACKET_STATE
+    BEQ @no_mouse
+    LDA #$00
+    STA MOUSE_ABSENT
+    RTS
+@no_mouse:
+    LDA #$FF
+    STA MOUSE_ABSENT
+@return:
+    RTS
+@set_timer:
+    LDA #$EF
+    STA TIMER_CTRL
+    LDA #$3C
+    STA TIMER_COUNT
+    RTS
+@kbd_ack_40:
+    LDA #$40
+    STA KBD_ACK
+    RTS
+@kbd_ack_80:
+    LDA #$80
+    STA KBD_ACK
+    RTS
+@reset_hook:
+    LDX SYS_ARG_0F
+    BNE @check_irq3
+    LDA #<HOOK_NOP
+    STA TIMER_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA TIMER_HOOK_VEC_HI
+    RTS
+@check_irq3:
+    DEX
+    BNE @check_irq1
+    LDA #<HOOK_NOP
+    STA IRQ3_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA IRQ3_HOOK_VEC_HI
+    RTS
+@check_irq1:
+    DEX
+    BNE @check_irq4
+    LDA #<HOOK_NOP
+    STA IRQ1_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA IRQ1_HOOK_VEC_HI
+    RTS
+@check_irq4:
+    DEX
+    BNE @check_mouse
+    LDA #<HOOK_NOP
+    STA IRQ4_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA IRQ4_HOOK_VEC_HI
+    RTS
+@check_mouse:
+    DEX
+    BNE @check_kbd
+    LDA #<HOOK_NOP
+    STA MOUSE_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA MOUSE_HOOK_VEC_HI
+    RTS
+@check_kbd:
+    DEX
+    BNE @return2
+    LDA #<HOOK_NOP
+    STA KBD_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA KBD_HOOK_VEC_HI
+@return2:
+    RTS
+    .byte $7F,$BF,$DF,$EF,$F7,$FB,$FD
+; 作用：功能 $13 子功能 0-6 要置位的 IRQ_MASK_SHADOW 位：$80、$40、$20、$10、$08、$04、$02。
+; 引用者：API_13_IRQ_MASK
+IRQ_ENABLE_BITS:
+    .byte $80,$40,$20,$10,$08
+    .byte $04
+    .byte $02
+; 作用：系统功能 $14：鼠标复位：MOUSE_ABSENT 置 1，最多尝试 12 次 MOUSE_RESET_TRY，直到 MOUSE_PACKET_STATE 为 1（收到鼠标的标识字节，保存在 MOUSE_RESET_RESULT）。
+; 调用者：BOOT_INIT_DEVICES、SYSCALL_TABLE（地址表）
+API_14_MOUSE_RESET:
+    LDA #$01
+    STA MOUSE_ABSENT
+    LDX #$0C
+; 作用：鼠标复位的一次尝试：屏蔽相关中断，PERIPH_CTRL 位 1 拉低一段时间（定时器延时），再拉高并等鼠标回应（MOUSE_NEW_DATA_FLAG）；收到非 0 的 MOUSE_RAW_BYTE 就存入 MOUSE_RESET_RESULT 并令 MOUSE_PACKET_STATE=1，超时或收到 0 则为 0；为 0 时（外层最多 12 次）再试。
+; 输入：X=剩余尝试次数。
+; 调用者：MOUSE_RESET_TRY、API_14_MOUSE_RESET（顺序执行到这里）
+MOUSE_RESET_TRY:
+    TXA
+    PHA
+    LDA #$01
+    STA PAD_MOUSE_PORT
+    LDA #$00
+    STA MOUSE_NEW_DATA_FLAG
+    LDY #$00
+    LDA IRQ_MASK_SHADOW
+    AND #$9F
+    STA IRQ_MASK_SHADOW
+    STA IRQ_MASK
+    LDA PERIPH_CTRL
+    AND #$FD
+    STA PERIPH_CTRL
+    LDA #$01
+    STA TIMER_DELAY_LEFT
+    LDA #$1E
+    JSR TIMER_ARM
+    LDA #<TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_LO
+    LDA #>TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_HI
+@wait_low:
+    LDA TIMER_DELAY_LEFT
+    BNE @wait_low
+    LDA PERIPH_CTRL
+    ORA #$02
+    STA PERIPH_CTRL
+    LDA #$01
+    STA TIMER_DELAY_LEFT
+    LDA #$1E
+    JSR TIMER_ARM
+    LDA #<TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_LO
+    LDA #>TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_HI
+@wait_ack:
+    LDA TIMER_DELAY_LEFT
+    BEQ @store_state
+    LDA MOUSE_NEW_DATA_FLAG
+    BEQ @wait_ack
+    LDA MOUSE_RAW_BYTE
+    BEQ @store_state
+    STA MOUSE_RESET_RESULT
+    LDA #$01
+@store_state:
+    STA MOUSE_PACKET_STATE
+    LDA #$00
+    STA MOUSE_NEW_DATA_FLAG
+    PLA
+    TAX
+    LDA MOUSE_PACKET_STATE
+    BNE @return
+    DEX
+    BNE MOUSE_RESET_TRY
+@return:
+    RTS
+; 作用：延时用的定时器钩子：TIMER_DELAY_LEFT 倒数，未到 0 重新装 TIMER_CTRL；到 0 时恢复 IRQ_MASK_SHADOW 位 7，并把定时器钩子改回 HOOK_NOP。
+; 调用者：MOUSE_RESET_TRY（取地址）、API_17_KEYBOARD_INIT（取地址）、KBD_SEND_COMMAND（取地址）、KBD_SELF_TEST（取地址）
+TIMER_DELAY_HOOK:
+    DEC TIMER_DELAY_LEFT
+    BEQ @expired
+    LDA TIMER_EXPIRED_FLAG
+    ORA #$80
+    STA TIMER_CTRL
+    BNE @return
+@expired:
+    LDA IRQ_MASK_SHADOW
+    ORA #$80
+    STA IRQ_MASK_SHADOW
+    LDA #<HOOK_NOP
+    STA TIMER_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA TIMER_HOOK_VEC_HI
+@return:
+    RTS
+; 作用：启动一次延时：TIMER_COUNT 写 A-1，IRQ_MASK_SHADOW 位 7 清 0，TIMER_EXPIRED_FLAG 与 TIMER_CTRL 写 $AF；键盘与鼠标的收发握手用它计时。
+; 输入：A=间隔。
+; 调用者：MOUSE_RESET_TRY、API_17_KEYBOARD_INIT、KBD_SEND_COMMAND、KBD_SELF_TEST
+TIMER_ARM:
+    SEC
+    SBC #$01
+    STA TIMER_COUNT
+    LDA #$7F
+    AND IRQ_MASK_SHADOW
+    STA IRQ_MASK_SHADOW
+    STA IRQ_MASK
+    LDA #$AF
+    STA TIMER_EXPIRED_FLAG
+    STA TIMER_CTRL
+    RTS
+; 作用：系统功能 $15：把 SYS_USER_FLAG 置 1。
+; 调用者：SYSCALL_TABLE（地址表）
+API_15_SET_FLAG_0636:
+    LDA #$01
+    STA SYS_USER_FLAG
+    RTS
+; 作用：系统功能 $17：键盘复位与识别：KBD_READY 置 $FF，先复位自检（KBD_SELF_TEST，要收到 $AA），再发 $F2 读识别码并等应答 $FA 与识别字节，再依次发 $ED（设灯，参数 KBD_LEDS=2）、$F0 与 $01（选扫描码集），最后再发 $F2 收两个识别字节；全部通过 KBD_SELF_TEST_RESULT=1，任一步失败为 0；结束时 KBD_READY 清 0，KBD_ACK=$80，保存和恢复 X、Y。
+; 输出：KBD_SELF_TEST_RESULT。
+; 调用者：BOOT_INIT_DEVICES、SYSCALL_TABLE（地址表）
+API_17_KEYBOARD_INIT:
+    TXA
+    PHA
+    TYA
+    PHA
+    LDA #$FF
+    STA KBD_READY
+    LDA #$DF
+    AND IRQ_MASK_SHADOW
+    STA IRQ_MASK_SHADOW
+    STA IRQ_MASK
+    JSR KBD_SELF_TEST
+    CMP #$AA
+    BEQ @send_read_id
+    JMP @fail
+@send_read_id:
+    LDA #$F2
+    JSR KBD_SEND_COMMAND
+    CMP #$FA
+    BEQ @read_first_id
+    JMP @fail
+@read_first_id:
+    LDA #$00
+    STA KBD_RESPONSE
+    LDA #$01
+    STA TIMER_DELAY_LEFT
+    LDA #$19
+    JSR TIMER_ARM
+    LDA #<TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_LO
+    LDA #>TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_HI
+    LDA #$80
+    STA KBD_ACK
+@wait_first_id:
+    LDA KBD_RESPONSE
+    BNE @check_first_id
+    LDA TIMER_DELAY_LEFT
+    BNE @wait_first_id
+@check_first_id:
+    LDA KBD_SCANCODE
+    CMP #$00
+    BNE @read_second_id
+    JMP @fail
+@read_second_id:
+    LDA #$00
+    STA KBD_RESPONSE
+    LDA #$01
+    STA TIMER_DELAY_LEFT
+    LDA #$19
+    JSR TIMER_ARM
+    LDA #<TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_LO
+    LDA #>TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_HI
+    LDA #$80
+    STA KBD_ACK
+@wait_second_id:
+    LDA KBD_RESPONSE
+    BNE @set_leds_cmd
+    LDA TIMER_DELAY_LEFT
+    BNE @wait_second_id
+@set_leds_cmd:
+    LDA #$ED
+    JSR KBD_SEND_COMMAND
+    CMP #$FA
+    BEQ @set_leds_value
+    JMP @fail
+@set_leds_value:
+    LDA #$02
+    STA KBD_LEDS
+    JSR KBD_SEND_COMMAND
+    CMP #$FA
+    BEQ @scan_set_cmd
+    JMP @fail
+@scan_set_cmd:
+    LDA #$F0
+    JSR KBD_SEND_COMMAND
+    CMP #$FA
+    BEQ @scan_set_value
+    JMP @fail
+@scan_set_value:
+    LDA #$01
+    JSR KBD_SEND_COMMAND
+    CMP #$FA
+    BNE @fail
+    LDA #$F2
+    JSR KBD_SEND_COMMAND
+    LDX #$02
+@read_id_next:
+    LDA #$00
+    STA KBD_RESPONSE
+    LDA #$80
+    STA KBD_ACK
+@wait_id_byte:
+    LDA KBD_RESPONSE
+    BEQ @wait_id_byte
+    DEX
+    BEQ @ok
+    LDA KBD_SCANCODE
+    STA KEY_QUEUE
+    JMP @read_id_next
+@fail:
+    LDA #$00
+    JMP @store_result
+@ok:
+    LDA #$01
+@store_result:
+    STA KBD_SELF_TEST_RESULT
+    LDA #$00
+    STA KBD_READY
+    LDA #$80
+    STA KBD_ACK
+    PLA
+    TAY
+    PLA
+    TAX
+    RTS
+; 作用：向键盘发送命令字节 A：写 KBD_OUT_PORT，KBD_ACK 握手，经 KBD_DATA、KBD_ACK 并配合定时器延时等待键盘回应，最后取键盘的应答字节。
+; 输入：A=命令字节。
+; 输出：A=键盘的应答字节（KBD_SCANCODE），超时 $FF。
+; 调用者：API_17_KEYBOARD_INIT、KBD_SELF_TEST
+KBD_SEND_COMMAND:
+    STA KBD_OUT_PORT
+    LDA #$01
+    STA KBD_ACK
+    LDA #$01
+    STA TIMER_DELAY_LEFT
+    LDA #$50
+    JSR TIMER_ARM
+    LDA #<TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_LO
+    LDA #>TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_HI
+@wait_start:
+    LDA TIMER_DELAY_LEFT
+    BNE @wait_start
+    LDA #$01
+    STA TIMER_DELAY_LEFT
+    LDA #$50
+    JSR TIMER_ARM
+    LDA #<TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_LO
+    LDA #>TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_HI
+    LDA #$A0
+    STA KBD_DATA
+    LDA #$00
+    STA KBD_RESPONSE
+    LDA #$85
+    STA KBD_ACK
+@wait_response_a0:
+    LDA KBD_RESPONSE
+    BNE @release
+    LDA TIMER_DELAY_LEFT
+    BNE @wait_response_a0
+@release:
+    LDA #$00
+    STA KBD_RESPONSE
+    LDA #$01
+    STA TIMER_DELAY_LEFT
+    LDA #$14
+    JSR TIMER_ARM
+    LDA #<TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_LO
+    LDA #>TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_HI
+    LDA #$80
+    STA KBD_DATA
+    LDA #$80
+    STA KBD_ACK
+@wait_ack:
+    LDA KBD_RESPONSE
+    BNE @got_ack
+    LDA TIMER_DELAY_LEFT
+    BNE @wait_ack
+    LDA #$FF
+    BNE @return
+@got_ack:
+    LDA TIMER_EXPIRED_FLAG
+    AND #$7F
+    STA TIMER_CTRL
+    LDA KBD_SCANCODE
+@return:
+    RTS
+; 作用：向键盘发复位命令 $FF 并等应答（$FA 之后要收到 $AA），A 返回 1-4 表示不同的失败原因，收到 $AA 时返回 $AA
+; 输出：A=$AA 自检通过，1 键盘没有响应，2 应答不是 $FA，3 等不到 $AA，4 回的字节不是 $AA。
+; 调用者：API_17_KEYBOARD_INIT
+KBD_SELF_TEST:
+    LDA #$FF
+    JSR KBD_SEND_COMMAND
+    CMP #$FF
+    BEQ @no_response
+    CMP #$FA
+    BEQ @wait_reset
+    LDA #$02
+    JMP @return
+@no_response:
+    LDA #$01
+    JMP @return
+@wait_reset:
+    LDA #$01
+    STA TIMER_DELAY_LEFT
+    JSR TIMER_ARM
+    LDA #<TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_LO
+    LDA #>TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_HI
+@wait_delay:
+    LDA TIMER_DELAY_LEFT
+    BNE @wait_delay
+    LDA #$80
+    STA KBD_ACK
+    LDA #$02
+    STA TIMER_DELAY_LEFT
+    LDA #$FA
+    JSR TIMER_ARM
+    LDA #<TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_LO
+    LDA #>TIMER_DELAY_HOOK
+    STA TIMER_HOOK_VEC_HI
+    LDA #$00
+    STA KBD_RESPONSE
+@wait_aa:
+    LDA KBD_RESPONSE
+    BNE @got_byte
+    LDA TIMER_DELAY_LEFT
+    BNE @wait_aa
+    LDA #$03
+    JMP @return
+@got_byte:
+    LDA KBD_SCANCODE
+    CMP #$AA
+    BEQ @return
+    LDA #$04
+@return:
+    RTS
+; 作用：系统功能 $18：系统硬件与状态初始化（复位后调用）：把 PPU 控制与显示、中断屏蔽、定时器、各个中断与 NMI 钩子（HOOK_NOP）、键盘与手柄与鼠标的状态（鼠标范围 X 0-$FC、Y 0-$EE）、打印口、输入法可用标志、字库、上下文栈、时钟（12:00:00）全部复位为默认值，清调色板与精灵缓冲（CLEAR_PALETTE_BUFFER、CLEAR_OAM_SHADOW），开中断；经功能 $10 子功能 4、7 设置显示并等一帧；最后初始化 DOS 状态（DOS_INIT_STATE）并清 SOUND_FLAGS 位 7。
+; 调用者：RESET、SYSCALL_TABLE（地址表）
+API_18:
+    LDA #$08
+    STA PPU_CTRL
+    STA PPU_CTRL_SHADOW
+    LDA #$06
+    STA PPU_MASK
+    STA PPU_MASK_SHADOW
+    LDA #$80
+    STA KBD_DATA
+    LDA #$FF
+    STA IRQ_MASK_SHADOW
+    STA IRQ_MASK
+    LDA #$00
+    STA KBD_ACK
+    STA PAD_MOUSE_PORT
+    STA JOY1
+    STA INPUT_RESERVED_0631
+    STA MOUSE_PACKET_STATE
+    STA KBD_SELF_TEST_RESULT
+    STA PORT4302_BUSY
+    STA PORT4302_FLAGS
+    STA PORT4302_COMMAND
+    STA PRN_PORT_READY
+    STA PRINT_EXT_ENABLE
+    STA IME_AVAILABLE_FLAGS
+    LDA #$BF
+    STA PERIPH_CTRL
+    LDA #$08
+    STA PPU_EXT_CTRL
+    STA PPU_EXT_CTRL_SHADOW
+    LDA #$4F
+    STA TIMER_EXPIRED_FLAG
+    STA TIMER_CTRL
+    JSR CLEAR_PALETTE_BUFFER
+    JSR CLEAR_OAM_SHADOW
+    LDA #<HOOK_NOP
+    STA TIMER_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA TIMER_HOOK_VEC_HI
+    LDA #<HOOK_NOP
+    STA IRQ3_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA IRQ3_HOOK_VEC_HI
+    LDA #<HOOK_NOP
+    STA IRQ1_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA IRQ1_HOOK_VEC_HI
+    LDA #<HOOK_NOP
+    STA IRQ2_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA IRQ2_HOOK_VEC_HI
+    LDA #<HOOK_NOP
+    STA IRQ4_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA IRQ4_HOOK_VEC_HI
+    LDA #<HOOK_NOP
+    STA MOUSE_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA MOUSE_HOOK_VEC_HI
+    LDA #<HOOK_NOP
+    STA KBD_HOOK_VEC_LO
+    LDA #>HOOK_NOP
+    STA KBD_HOOK_VEC_HI
+    LDA #$00
+    STA KBD_READY
+    STA KBD_RESPONSE
+    LDA #$02
+    STA KBD_LEDS
+    LDA #$20
+    STA KBD_FLAGS
+    LDA #$00
+    STA KEY_READ_INDEX
+    STA KEY_WRITE_INDEX
+    STA KBD_PREFIX_STATE
+    STA KBD_STATE_FLAG
+    STA KBD_LED_PENDING
+    LDY #$00
+@loop:
+    STA KEY_QUEUE,Y
+    INY
+    CPY #$0C
+    BNE @loop
+    LDA #$FF
+    STA PAD_KEY
+    LDA #$00
+    STA PAD1_BITS
+    STA PAD2_BITS
+    STA PAD1_RAW
+    STA PAD2_RAW
+    LDA #$00
+    STA MOUSE_RESET_RESULT
+    STA MOUSE_X
+    STA MOUSE_Y
+    STA MOUSE_BUTTON_BITS
+    STA MOUSE_BTN1_FLAGS
+    STA MOUSE_BTN2_FLAGS
+    STA MOUSE_BTN1_TIMER
+    STA MOUSE_BTN2_TIMER
+    STA MOUSE_Y_MIN
+    STA MOUSE_X_MIN
+    LDA #$FC
+    STA MOUSE_X_MAX
+    LDA #$EE
+    STA MOUSE_Y_MAX
+    LDA #$0A
+    STA MOUSE_PARAM
+    LDA #$00
+    STA NMI_FLAGS
+    LDA #<HOOK_NOP
+    STA NMI_HOOK5_VEC_LO
+    LDA #>HOOK_NOP
+    STA NMI_HOOK5_VEC_HI
+    LDA #<HOOK_NOP
+    STA NMI_HOOK4_VEC_LO
+    LDA #>HOOK_NOP
+    STA NMI_HOOK4_VEC_HI
+    LDA #$00
+    STA GLYPH_MODE
+    STA VRAM_BANK
+    LDA #$FF
+    STA CONTEXT_COUNT
+    STA ESC_BREAK
+    LDA #$0C
+    STA CLOCK_HOURS
+    LDA #$00
+    STA CLOCK_MINUTES
+    STA CLOCK_SECONDS
+    STA CLOCK_MIDNIGHT_FLAG
+    LDA #$00
+    STA PPU_SCROLL_X_SHADOW
+    STA PPU_SCROLL_Y_SHADOW
+    STA PPU_SCROLL
+    STA PPU_SCROLL
+    LDA #$88
+    STA PPU_CTRL_SHADOW
+    STA PPU_CTRL
+    CLI
+    LDA #$10
+    STA SYS_FUNCTION
+    LDA #$04
+    STA SYS_SUBFUNCTION
+    LDA #$10
+    STA SYS_ARG_0F
+    JSR API_10_VIDEO_OPTION
+    LDX #$01
+    JSR API_1B_WAIT_FRAMES
+    LDA #$10
+    STA SYS_FUNCTION
+    LDA #$04
+    STA SYS_SUBFUNCTION
+    LDA #$00
+    STA SYS_ARG_0F
+    JSR API_10_VIDEO_OPTION
+    LDA #$07
+    STA SYS_SUBFUNCTION
+    LDA #$08
+    STA SYS_ARG_0F
+    JSR API_10_VIDEO_OPTION
+    JSR DOS_INIT_STATE
+    LDA SOUND_FLAGS
+    AND #$7F
+    STA SOUND_FLAGS
+    RTS
+; 作用：空钩子：所有中断钩子与 NMI 钩子的默认值，只含 NOP 与 RTS
+; 调用者：BOOT_INIT_DEVICES（取地址）、API_12_PPU_CONTROL（取地址）、API_13_IRQ_MASK（取地址）、TIMER_DELAY_HOOK（取地址）、API_18（取地址）
+HOOK_NOP:
+    NOP
+    RTS
+; 作用：把精灵缓冲 $0200-$02FF 全写成 $F0（精灵移出屏幕）
+; 调用者：API_18
+CLEAR_OAM_SHADOW:
+    LDA #$F0
+    LDY #$00
+@loop:
+    STA SPRITE0_Y,Y
+    INY
+    BNE @loop
+    RTS
+; 作用：把调色板区 $2040 起的 64 字节全写成 $0E（黑色）
+; 调用者：API_18
+CLEAR_PALETTE_BUFFER:
+    LDA #$0E
+    LDY #$00
+@loop:
+    STA PPU_EXT_PALETTE,Y
+    INY
+    CPY #$40
+    BNE @loop
+    RTS
+; 作用：系统功能 $19：关闭 NMI（PPU_CTRL 位 7 清 0），等到垂直消隐，再关闭背景与精灵显示（PPU_MASK 清位 3、4）。
+; 调用者：SYSCALL_TABLE（地址表）
+API_19_DISPLAY_OFF:
+    LDA PPU_CTRL_SHADOW
+    AND #$7F
+    STA PPU_CTRL_SHADOW
+    STA PPU_CTRL
+@loop:
+    LDA PPU_STATUS
+    BPL @loop
+    LDA PPU_MASK_SHADOW
+    AND #$E7
+    STA PPU_MASK
+    RTS
+; 作用：系统功能 $1A：等到垂直消隐开始，开启 NMI 并恢复 PPU_MASK。
+; 调用者：SYSCALL_TABLE（地址表）、API_1A_WAIT_VBLANK_ON
+API_1A_WAIT_VBLANK_ON:
+    LDA PPU_STATUS
+    BPL API_1A_WAIT_VBLANK_ON
+    LDA PPU_CTRL_SHADOW
+    ORA #$80
+    STA PPU_CTRL_SHADOW
+    STA PPU_CTRL
+    LDA PPU_MASK_SHADOW
+    STA PPU_MASK
+    RTS
+; 作用：系统功能 $1B：等待 X 个完整的垂直消隐周期（帧）。
+; 输入：X=帧数。
+; 调用者：RESET、KBD_HANDLER、KBD_SET_LEDS、SYSCALL_TABLE（地址表）、API_18、API_1B_WAIT_FRAMES、DMA_CHUNK_TO_VRAM、API_33等 11 处
+API_1B_WAIT_FRAMES:
+    JSR WAIT_ONE_FRAME
+    DEX
+    BNE API_1B_WAIT_FRAMES
+    RTS
+; 作用：等一次垂直消隐（先等 PPU_STATUS 位 7 置位，再等它清除）
+; 调用者：API_1B_WAIT_FRAMES、WAIT_ONE_FRAME、API30_SUB_NAMETABLE_DMA、API_31
+WAIT_ONE_FRAME:
+    LDA PPU_STATUS
+    BPL WAIT_ONE_FRAME
+@loop:
+    LDA PPU_STATUS
+    BMI @loop
+    RTS
+; 作用：系统功能 $1C：把页组 SYS_GROUP、地址 PROG_ENTRY_LO/HI 与栈指针（取自 SYS_SUBFUNCTION）压入上下文栈（CONTEXT_GROUP、CONTEXT_ADDR_LO/HI、CONTEXT_SP，每项 4 字节，最多 10 项，CONTEXT_COUNT 为顶项序号）；栈已满时不保存。
+; 输入：SYS_GROUP、PROG_ENTRY_LO/HI、SYS_SUBFUNCTION。
+; 调用者：SYSCALL_TABLE（地址表）
+API_1C_SAVE_CONTEXT:
+    LDA CONTEXT_COUNT
+    CMP #$FF
+    BEQ @store
+    CMP #$09
+    BCC @store
+    RTS
+@store:
+    INC CONTEXT_COUNT
+    LDA CONTEXT_COUNT
+    ASL A
+    ASL A
+    TAY
+    LDA SYS_GROUP
+    STA CONTEXT_GROUP,Y
+    LDA PROG_ENTRY_LO
+    STA CONTEXT_ADDR_LO,Y
+    LDA PROG_ENTRY_HI
+    STA CONTEXT_ADDR_HI,Y
+    LDA SYS_SUBFUNCTION
+    STA CONTEXT_SP,Y
+    RTS
+; 作用：系统功能 $1D：弹出上下文栈顶项并跳过去，类似 longjmp，不返回：栈空（CONTEXT_COUNT 不小于 10）时直接返回；否则 NMI_FLAGS 与 APU_STATUS 清 0（关 NMI 服务与声音），IRQ_MASK 写 $1F，恢复保存的栈指针，CONTEXT_COUNT 减 1，把保存的页组映射到 $8000 窗口（MAP_WINDOWS_8000）后跳到保存的地址。
+; 调用者：SYSCALL_TABLE（地址表）
+API_1D_RESTORE_CONTEXT:
+    LDA CONTEXT_COUNT
+    CMP #$0A
+    BCC @restore
+    RTS
+@restore:
+    LDA #$00
+    STA NMI_FLAGS
+    STA APU_STATUS
+    LDA #$1F
+    STA IRQ_MASK_SHADOW
+    STA IRQ_MASK
+    LDA CONTEXT_COUNT
+    ASL A
+    ASL A
+    TAY
+    LDA CONTEXT_GROUP,Y
+    STA CONTEXT_TEMP
+    LDA CONTEXT_ADDR_LO,Y
+    STA CALL_VEC_LO
+    LDA CONTEXT_ADDR_HI,Y
+    STA CALL_VEC_HI
+    LDA CONTEXT_SP,Y
+    TAX
+    TXS
+    DEC CONTEXT_COUNT
+    LDA CONTEXT_TEMP
+    JSR MAP_WINDOWS_8000
+    JMP (CALL_VEC_LO)
+; 作用：系统功能 $1E：按子功能 0-$0C（超过时 SYS_STATUS=$FF）查询显示与系统状态，结果放 SYS_ARG_0F，用紧跟 JSR 的内联跳转表分流到 QUERY_0 至 QUERY_12。
+; 输入：SYS_SUBFUNCTION。
+; 输出：SYS_ARG_0F。
+; 调用者：SYSCALL_TABLE（地址表）
+API_1E_QUERY_STATE:
+    LDA SYS_SUBFUNCTION
+    CMP #$0D
+    BCC @dispatch
+    LDA #$FF
+    STA SYS_STATUS
+    RTS
+@dispatch:
+    JSR INLINE_JUMP_TABLE
+    .word QUERY_0,QUERY_1,QUERY_2,QUERY_3,QUERY_4,QUERY_5,QUERY_6,QUERY_7
+    .word QUERY_8,QUERY_9,QUERY_10,QUERY_11,QUERY_12

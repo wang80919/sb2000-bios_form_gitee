@@ -1,0 +1,100 @@
+; 作用：------------------------------------------------------------------------
+; 名称：timer-and-hooks.asm
+; 说明：定时器中断与各中断源的钩子调用
+; 作者：sungbin
+; 邮箱：sungbin@3578.cn
+; 日期：2026-11-09
+; 备注：在 ROM 里接在 kernel/keyboard-driver.asm 之后
+; ------------------------------------------------------------------------
+; 定时器中断（$4033 位 7）：双击计时 $035F、$0368 加 1，到 MOUSE_PARAM 时置 $0369、$036A 位 0；再推进软件时钟 $0689（计到 $10）、$068A（$3C）、$068B（$3C）、$068C（$18），最后进入 TIMER_CALL_HOOK
+; 调用者：IRQ_HANDLER
+TIMER_IRQ_HANDLER:
+    INC MOUSE_BTN1_TIMER
+    LDA MOUSE_BTN1_TIMER
+    CMP MOUSE_PARAM
+    BCC @button2_timer
+    LDA MOUSE_BTN1_FLAGS
+    ORA #$01
+    STA MOUSE_BTN1_FLAGS
+@button2_timer:
+    INC MOUSE_BTN2_TIMER
+    LDA MOUSE_BTN2_TIMER
+    CMP MOUSE_PARAM
+    BCC @clock
+    LDA MOUSE_BTN2_FLAGS
+    ORA #$01
+    STA MOUSE_BTN2_FLAGS
+@clock:
+    INC CLOCK_TICKS
+    LDA CLOCK_TICKS
+    CMP #$10
+    BCC TIMER_CALL_HOOK
+    LDA #$00
+    STA CLOCK_TICKS
+    INC CLOCK_SECONDS
+    LDA CLOCK_SECONDS
+    CMP #$3C
+    BCC TIMER_CALL_HOOK
+    LDA #$00
+    STA CLOCK_SECONDS
+    INC CLOCK_MINUTES
+    LDA CLOCK_MINUTES
+    CMP #$3C
+    BCC TIMER_CALL_HOOK
+    LDA #$00
+    STA CLOCK_MINUTES
+    INC CLOCK_HOURS
+    LDA CLOCK_HOURS
+    CMP #$18
+    BCC TIMER_CALL_HOOK
+    LDA #$00
+    STA CLOCK_HOURS
+    LDA #$FF
+    STA CLOCK_MIDNIGHT_FLAG
+; 作用：换入 $0690 页组，跳到 TIMER_HOOK_VEC_LO/TIMER_HOOK_VEC_HI 的定时器钩子（功能 $13 子功能 $88、序号 0 安装）
+; 调用者：TIMER_IRQ_HANDLER
+TIMER_CALL_HOOK:
+    LDA TIMER_HOOK_PAGE
+    STA WINDOW_SAVE_0
+    JSR MAP_WINDOWS_8000
+    JMP (TIMER_HOOK_VEC_LO)
+; 作用：鼠标中断后的钩子：换入 $068F 页组，跳到 MOUSE_HOOK_VEC_LO/MOUSE_HOOK_VEC_HI（钩子序号 4）
+; 调用者：IRQ_HANDLER
+MOUSE_CALL_HOOK:
+    LDA MOUSE_HOOK_PAGE
+    STA WINDOW_SAVE_0
+    JSR MAP_WINDOWS_8000
+    JMP (MOUSE_HOOK_VEC_LO)
+; 作用：键盘中断后的钩子：换入 $068E 页组，跳到 KBD_HOOK_VEC_LO/KBD_HOOK_VEC_HI（钩子序号 5）
+; 调用者：IRQ_HANDLER
+KBD_CALL_HOOK:
+    LDA KBD_HOOK_PAGE
+    STA WINDOW_SAVE_0
+    JSR MAP_WINDOWS_8000
+    JMP (KBD_HOOK_VEC_LO)
+    LDA IRQ3_HOOK_PAGE
+    STA WINDOW_SAVE_0
+    JSR MAP_WINDOWS_8000
+    JMP (IRQ3_HOOK_VEC_LO)
+; 作用：$4033 位 4 的钩子：中断分发在位 4 为 1 时调用，换入 $0694 页组，跳到 IRQ4_HOOK_VEC_LO/IRQ4_HOOK_VEC_HI（模拟器里没有设备置位该位）
+; 调用者：IRQ_HANDLER
+IRQ4_CALL_HOOK:
+    LDA IRQ4_HOOK_PAGE
+    STA WINDOW_SAVE_0
+    JSR MAP_WINDOWS_8000
+    JMP (IRQ4_HOOK_VEC_LO)
+; 作用：$4033 位 1 的钩子：中断分发在位 1 为 1 时调用，换入 $0692 页组，跳到 IRQ1_HOOK_VEC_LO/IRQ1_HOOK_VEC_HI（模拟器里没有设备置位该位）
+; 调用者：IRQ_HANDLER
+IRQ1_CALL_HOOK:
+    LDA IRQ1_HOOK_PAGE
+    STA WINDOW_SAVE_0
+    JSR MAP_WINDOWS_8000
+    JMP (IRQ1_HOOK_VEC_LO)
+; 作用：$4033 位 2 的钩子：中断分发在位 2 为 1 时调用，换入 $0693 页组，跳到 IRQ2_HOOK_VEC_LO/IRQ2_HOOK_VEC_HI（模拟器里没有设备置位该位）
+; 调用者：IRQ_HANDLER
+IRQ2_CALL_HOOK:
+    LDA IRQ2_HOOK_PAGE
+    STA WINDOW_SAVE_0
+    JSR MAP_WINDOWS_8000
+    JMP (IRQ2_HOOK_VEC_LO)
+    .byte $7A,$DF,$42,$E0,$3E,$E0,$2B,$E0,$79,$DF,$60

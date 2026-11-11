@@ -1,0 +1,15 @@
+{
+  "name": "sb2000-bios",
+  "version": "0.1.0",
+  "private": true,
+  "description": "小霸王学习机 SB2000 BIOS 源码工程",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node tools/bios-build.mjs",
+    "build:fast": "node tools/bios-build.mjs --variant fastboot",
+    "test": "node --test \"test/**/*.test.mjs\""
+  }
+}

@@ -1,0 +1,416 @@
+; 作用：------------------------------------------------------------------------
+; 名称：speech-port-services.asm
+; 说明：语音端口服务（功能 $74、$75）
+; 作者：sungbin
+; 邮箱：sungbin@3578.cn
+; 日期：2026-11-09
+; 备注：在 ROM 里接在 kernel/system-state.asm 之后
+; ------------------------------------------------------------------------
+; 功能 $74 子功能 1：$032B 位 6 置位
+; 调用者：API74_JUMP_TABLE（地址表）
+API74_SUB_1:
+    LDA PORT4302_FLAGS
+    ORA #$40
+    STA PORT4302_FLAGS
+    JMP WAIT_VBLANK_RETURN
+; 作用：功能 $74 子功能 2：$032B 位 1 置位
+; 调用者：API74_JUMP_TABLE（地址表）
+API74_SUB_2:
+    LDA PORT4302_FLAGS
+    ORA #$02
+    STA PORT4302_FLAGS
+    JMP WAIT_VBLANK_RETURN
+; 作用：功能 $74 子功能 3：$032B 位 1 清除
+; 调用者：API74_JUMP_TABLE（地址表）
+API74_SUB_3:
+    LDA PORT4302_FLAGS
+    AND #$FD
+    STA PORT4302_FLAGS
+    JMP WAIT_VBLANK_RETURN
+; 作用：功能 $74 子功能 4：$032B 位 2 置位
+; 调用者：API74_JUMP_TABLE（地址表）
+API74_SUB_4:
+    LDA PORT4302_FLAGS
+    ORA #$04
+    STA PORT4302_FLAGS
+    JMP WAIT_VBLANK_RETURN
+; 作用：功能 $74 子功能 5：$032B 位 2 清除
+; 调用者：API74_JUMP_TABLE（地址表）
+API74_SUB_5:
+    LDA PORT4302_FLAGS
+    AND #$FB
+    STA PORT4302_FLAGS
+    JMP WAIT_VBLANK_RETURN
+; 作用：功能 $74 子功能 6：$032B 位 0 置位
+; 调用者：API74_JUMP_TABLE（地址表）
+API74_SUB_6:
+    LDA PORT4302_FLAGS
+    ORA #$01
+    STA PORT4302_FLAGS
+    JMP WAIT_VBLANK_RETURN
+; 作用：功能 $74 子功能 7：$032B 位 0 清除
+; 调用者：API74_JUMP_TABLE（地址表）
+API74_SUB_7:
+    LDA PORT4302_FLAGS
+    AND #$FE
+    STA PORT4302_FLAGS
+    JMP WAIT_VBLANK_RETURN
+; 作用：功能 $74 子功能 8：$032B 位 3 置位
+; 调用者：API74_JUMP_TABLE（地址表）
+API74_SUB_8:
+    LDA PORT4302_FLAGS
+    ORA #$08
+    STA PORT4302_FLAGS
+    JMP WAIT_VBLANK_RETURN
+; 作用：功能 $74 子功能 9：$032B 位 3 清除
+; 调用者：API74_JUMP_TABLE（地址表）
+API74_SUB_9:
+    LDA PORT4302_FLAGS
+    AND #$F7
+    STA PORT4302_FLAGS
+    JMP WAIT_VBLANK_RETURN
+; 作用：功能 $74 子功能 10 以上：等当前传输结束后向 $4302 外设发命令字节（$76 加子功能），$0329 置 $FF 触发
+; 调用者：API74_JUMP_TABLE（地址表）
+API74_SEND_COMMAND:
+    LDA PORT4302_FLAGS
+    TAX
+    AND #$40
+    BEQ WAIT_VBLANK_RETURN
+    LDA PORT4302_BUSY
+    BEQ @start
+    TXA
+    AND #$02
+    BNE WAIT_VBLANK_RETURN
+@loop:
+    LDA PORT4302_BUSY
+    BNE @loop
+@start:
+    LDA PERIPH_CTRL
+    ORA #$40
+    STA PERIPH_CTRL_SHADOW
+    STA PERIPH_CTRL
+    LDA SYS_SUBFUNCTION
+    CLC
+    ADC #$76
+    STA PORT4302_COMMAND
+    LDA #$FF
+    STA PORT4302_BUSY
+@wait_done:
+    LDA PORT4302_BUSY
+    BNE @wait_done
+; 作用：等一个垂直消隐周期（先等进入、再等结束）后返回；功能 $74 各子功能共用的尾部
+; 调用者：API_74_PORT4302_CONTROL、API74_SUB_0、API74_SUB_1、API74_SUB_2、API74_SUB_3、API74_SUB_4、API74_SUB_5、API74_SUB_6等 13 处
+WAIT_VBLANK_RETURN:
+    LDA PPU_STATUS
+    BPL WAIT_VBLANK_RETURN
+@loop:
+    LDA PPU_STATUS
+    BMI @loop
+    RTS
+; 作用：功能 $75：向 $4302 外设发送数据：子功能 0 把调用者给的数据（页组、窗口地址）整段发送；子功能 1 按序号 $064A:$064B 从调用者给的词条表选一段发送；子功能 2 及以上从保存的页 $032A、窗口地址 $0A/$0B 处读播放列表，逐项按子功能 1 的规则选段发送（序号越界时什么都不发），再等待 $0651 帧（DELAY_FRAMES_0651），表与列表的格式见 verify/cases/p04-speech.mjs，三种用法都有用例）
+; 调用者：SYSCALL_TABLE（地址表）
+API_75_PORT4302_SEND:
+    LDA SYS_SUBFUNCTION
+    BEQ @whole_block
+    CMP #$01
+    BNE @playlist
+    JSR PORT4302_PREPARE_SEND
+    JMP PORT4302_RETURN
+@whole_block:
+    LDA PORT4302_FLAGS
+    TAX
+    AND #$40
+    BEQ @wait_frame
+    LDA PORT4302_BUSY
+    BEQ @set_control
+    TXA
+    AND #$02
+    BNE @wait_frame
+@loop:
+    LDA PORT4302_BUSY
+    BNE @loop
+@set_control:
+    LDA PERIPH_CTRL
+    ORA #$40
+    STA PERIPH_CTRL_SHADOW
+    STA PERIPH_CTRL
+@wait_frame:
+    LDX #$01
+    JSR API_1B_WAIT_FRAMES
+    LDA #$2C
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    LDA SYS_PAGE
+    STA PORT4302_PAGE
+    LDA FAR_OFFSET_LO
+    STA PORT4302_ADDR_LO
+    LDA FAR_OFFSET_HI
+    STA PORT4302_ADDR_HI
+    JSR PORT4302_START
+    JMP PORT4302_RETURN
+@playlist:
+    LDA SYS_GROUP
+    STA PORT4302_ARG_0
+    LDA PROG_ENTRY_LO
+    STA PORT4302_ARG_1
+    LDA PROG_ENTRY_HI
+    STA PORT4302_ARG_2
+    LDA PORT4302_PAGE
+    STA SYS_GROUP
+    LDA PORT4302_ADDR_LO
+    STA PROG_ENTRY_LO
+    LDA PORT4302_ADDR_HI
+    STA PROG_ENTRY_HI
+    LDA #$2C
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    LDA #$24
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_10
+    STA SYS_ARG_0C
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_10
+    STA SYS_ARG_0D
+@next_entry:
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_10
+    STA SYS_ARG_08
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_10
+    STA SYS_ARG_07
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_10
+    STA SYS_ARG_0E
+    LDA SYS_PAGE
+    PHA
+    LDA FAR_OFFSET_LO
+    PHA
+    LDA FAR_OFFSET_HI
+    PHA
+    LDA PORT4302_ARG_0
+    STA SYS_GROUP
+    LDA PORT4302_ARG_1
+    STA PROG_ENTRY_LO
+    LDA PORT4302_ARG_2
+    STA PROG_ENTRY_HI
+    JSR PORT4302_PREPARE_SEND
+    JSR DELAY_FRAMES_0651
+    PLA
+    STA FAR_OFFSET_HI
+    PLA
+    STA FAR_OFFSET_LO
+    PLA
+    STA SYS_PAGE
+    LDA SYS_ARG_0D
+    ORA SYS_ARG_0C
+    BEQ @done
+    JSR DEC16_064F
+    JMP @next_entry
+@done:
+    JMP PORT4302_RETURN
+; 作用：功能 $75 子功能 1 的准备：等当前传输结束，$4026 位 6 置位，把功能 $2C 得到的页与偏移存入 PORT4302_PAGE、PORT4302_ADDR；读表头 2 字节（词条个数，低字节在前），序号 $064A:$064B 不小于个数就返回；否则取第“序号”项（表头后每项 3 字节 [页号增量、相对表起点的偏移低字节、偏移高字节]），算出词条所在的页与偏移存回 PORT4302_PAGE、PORT4302_ADDR，再调用 PORT4302_START（用例 p04-speech.mjs）
+; 调用者：API_75_PORT4302_SEND
+PORT4302_PREPARE_SEND:
+    LDA PORT4302_FLAGS
+    TAX
+    AND #$40
+    BEQ @wait_frame
+    LDA PORT4302_BUSY
+    BEQ @set_control
+    TXA
+    AND #$02
+    BNE @wait_frame
+@loop:
+    LDA PORT4302_BUSY
+    BNE @loop
+@set_control:
+    LDA PERIPH_CTRL
+    ORA #$40
+    STA PERIPH_CTRL_SHADOW
+    STA PERIPH_CTRL
+@wait_frame:
+    LDX #$01
+    JSR API_1B_WAIT_FRAMES
+    LDA #$2C
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    LDA SYS_PAGE
+    STA PORT4302_PAGE
+    LDA FAR_OFFSET_LO
+    STA PORT4302_ADDR_LO
+    LDA FAR_OFFSET_HI
+    STA PORT4302_ADDR_HI
+    LDA #$00
+    STA PORT4302_WORK_0
+    LDA #$24
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_10
+    STA PORT4302_WORK_3
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_10
+    STA PORT4302_WORK_4
+    LDA SYS_ARG_07
+    CMP PORT4302_WORK_4
+    BCC @index_ok
+    BEQ @check_low
+    JMP PORT4302_RETURN
+@check_low:
+    LDA SYS_ARG_08
+    CMP PORT4302_WORK_3
+    BCC @index_ok
+    JMP PORT4302_RETURN
+@index_ok:
+    LDA SYS_ARG_08
+    ASL A
+    STA PORT4302_WORK_3
+    LDA SYS_ARG_07
+    ROL A
+    STA PORT4302_WORK_4
+    LDA PORT4302_WORK_3
+    CLC
+    ADC SYS_ARG_08
+    STA PORT4302_WORK_3
+    LDA PORT4302_WORK_4
+    ADC SYS_ARG_07
+    STA PORT4302_WORK_4
+    LDA PORT4302_ADDR_LO
+    CLC
+    ADC #$02
+    STA PORT4302_WORK_1
+    LDA PORT4302_ADDR_HI
+    ADC #$00
+    STA PORT4302_WORK_2
+    LDA PORT4302_WORK_3
+    CLC
+    ADC PORT4302_WORK_1
+    STA FAR_OFFSET_LO
+    LDA PORT4302_WORK_4
+    ADC PORT4302_WORK_2
+    STA FAR_OFFSET_HI
+    CMP #$10
+    BCC @no_carry1
+    SBC #$10
+    STA FAR_OFFSET_HI
+    INC PORT4302_WORK_0
+@no_carry1:
+    LDA PORT4302_PAGE
+    CLC
+    ADC PORT4302_WORK_0
+    STA SYS_PAGE
+    LDA #$00
+    STA PORT4302_WORK_0
+    LDA #$24
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_10
+    CLC
+    ADC PORT4302_PAGE
+    STA PORT4302_PAGE
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_10
+    STA PORT4302_WORK_1
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_10
+    STA PORT4302_WORK_2
+    LDA PORT4302_ADDR_LO
+    CLC
+    ADC PORT4302_WORK_1
+    STA PORT4302_ADDR_LO
+    LDA PORT4302_ADDR_HI
+    ADC PORT4302_WORK_2
+    STA PORT4302_ADDR_HI
+    CMP #$10
+    BCC @no_carry2
+    SBC #$10
+    STA PORT4302_ADDR_HI
+    INC PORT4302_WORK_0
+@no_carry2:
+    LDA PORT4302_PAGE
+    CLC
+    ADC PORT4302_WORK_0
+    STA PORT4302_PAGE
+    JSR PORT4302_START
+    RTS
+; 作用：功能 $75 与 PORT4302_START 共用的返回（RTS）
+; 调用者：API_75_PORT4302_SEND、PORT4302_PREPARE_SEND
+PORT4302_RETURN:
+    RTS
+; 作用：启动向 $4302 的传输：必要时等当前传输结束，$0328 写 $0A 或 $0B（由 $032B 位 3 选），$4026 位 6 置位；$032B 位 0 为 0 时同步握手发送，否则交给 NMI_IO4302_FEED 逐字节送出（同步发送见 p04-speech.mjs 的 $75 子功能 0、1、2 用例，NMI 逐字节发送见 $74 子功能 10-13 用例）
+; 调用者：API_75_PORT4302_SEND、PORT4302_PREPARE_SEND
+PORT4302_START:
+    LDA PORT4302_BUSY
+    BEQ @set_command
+    LDA PORT4302_FLAGS
+    AND #$02
+    BEQ @loop
+    JMP @return
+@loop:
+    LDA PORT4302_BUSY
+    BNE @loop
+@set_command:
+    LDA PORT4302_FLAGS
+    AND #$08
+    LSR A
+    LSR A
+    LSR A
+    CLC
+    ADC #$0A
+    STA PORT4302_COMMAND
+    LDA PERIPH_CTRL
+    ORA #$40
+    STA PERIPH_CTRL_SHADOW
+    STA PERIPH_CTRL
+    LDA PORT4302_FLAGS
+    AND #$01
+    BNE @nmi_feed
+@wait_ready:
+    LDA SPEECH_PORT
+    BPL @wait_ready
+    LDA PORT4302_COMMAND
+    STA SPEECH_PORT
+    LDA PORT4302_PAGE
+    STA SYS_PAGE
+    LDA PORT4302_ADDR_LO
+    STA FAR_OFFSET_LO
+    LDA PORT4302_ADDR_HI
+    STA FAR_OFFSET_HI
+@send_byte:
+    LDA SPEECH_PORT
+    BPL @send_byte
+    AND #$7F
+    CMP #$0F
+    BEQ @wait_end
+    LDA #$24
+    STA SYS_FUNCTION
+    JSR VEC_SYSCALL
+    LDA SYS_ARG_10
+    STA SPEECH_PORT
+    JMP @send_byte
+@wait_end:
+    LDA SPEECH_PORT
+    BPL @wait_end
+    LDA #$0F
+    STA SPEECH_PORT
+    LDA #$00
+    STA PORT4302_COMMAND
+    STA PORT4302_BUSY
+    BEQ @return
+@nmi_feed:
+    LDA PORT4302_PAGE
+    STA PORT4302_FEED_PAGE
+    LDA PORT4302_ADDR_LO
+    STA PORT4302_FEED_LO
+    LDA PORT4302_ADDR_HI
+    STA PORT4302_FEED_HI
+    LDA #$FF
+    STA PORT4302_BUSY
+    LDA PORT4302_FLAGS
+    AND #$04
+    BEQ @return
+@wait_idle:
+    LDA PORT4302_BUSY
+    BNE @wait_idle
+@return:
+    RTS
